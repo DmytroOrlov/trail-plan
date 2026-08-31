@@ -5,11 +5,75 @@
 //> using packaging.graalvmArgs --no-fallback
 
 // ============================================================================
-// TEMPORARY / TEST-ONLY CLEANUP LEDGER — DELETE OR EXTRACT BEFORE FINAL FREEZE
+// PROJECT TODO / TEST-PROMOTION DISCIPLINE
+// ============================================================================
+// - Whenever investigation evidence establishes a new PRODUCT INVARIANT or
+//   reproduces a real regression, promote that property into the default-running
+//   contract/regression suite in the same follow-up change whenever it can be
+//   expressed deterministically and without coupling to incidental run counts.
+//   Do NOT wait for a separate user reminder.
+// - If the property is still only a hypothesis or depends on one current dataset,
+//   keep it evidence-only and add an explicit TODO here/cleanup-ledger entry
+//   stating what evidence is still required before promotion.
+// - Prefer extending an existing contract test over increasing test count when
+//   the new assertion is the same architectural contract.
+// - Selector stability contract discovered in FIX50/FIX51 and promoted in
+//   FIX52: adding a FAR, low-marginal-benefit comfort tail must not move an
+//   already-established LOCAL elbow when the new points do not alter the
+//   neighboring tradeoff geometry around that elbow. This guards against the
+//   old global-extrema normalization failure; it is NOT a rule that arbitrary
+//   new Pareto points may never change the selected route.
+//
+// ============================================================================
+// TEMPORARY / TEST-ONLY CLEANUP LEDGER + CLOSED EVIDENCE HISTORY
 // ============================================================================
 // Rule: every new evidence-only, differential, temporary diagnostic, synthetic
 // test fixture, or transitional compatibility path MUST be added here when it is
 // introduced. Production semantics must not depend on anything in this list.
+//
+// [TEST-ONLY CONTRACT SUITE REVIEW] FIX46 keeps exactly 22 default-running
+//        tests but rebalances them around product contracts instead of historical
+//        micro-fixes. Added direct coverage for CLI default/--no-test semantics,
+//        canonical input counts/identity, all three hard-wall thresholds,
+//        hard-vs-scored road policy, exact RAW complete-order behavior,
+//        mandatory exactly-once supplied-direction reconstruction, rider-selector
+//        guardrails, the human-report/exact-five-output-files contract, and the
+//        final reconstructed GPX 100m WARN / 250m FAIL thresholds. Historical
+//        regressions that still encode real contracts (corridor clipping,
+//        canonical <=10m safety sampling, real-ride direction, technical downhill
+//        policy, no-horizon exact rider search) remain. Tests are NOT scheduled
+//        for deletion; eventual extraction to a separate test source remains the
+//        cleanup target.
+//
+// [CLOSED / VALIDATED] FIX53 production12/local-selector adjudication:
+//        Canonical run passed 22/22 and E2E PASS. Restoring production12 reduced
+//        graph 1607->706-era evidence work back to accepted=1206/retained=540,
+//        and total runtime from ~108s (FIX52 candidate16) to ~69.4s while keeping
+//        exactly the same local-selector product as FIX51/FIX52:
+//          C1 7077.9s / 699.1s  (~1:57:58 / 11:39)
+//          C2 6921.4s / 906.9s  (~1:55:21 / 15:07)
+//          C3 7552.6s / 1102.3s (~2:05:53 / 18:22)
+//        Wall classes and LOOP/LOOP/P2P assignment were unchanged. This closes
+//        the candidate16 production question for the current product/inputs.
+//        Reopen midpoint-cover work only on new product requirements/evidence.
+//
+// [CLOSED / REMOVED] FIX45-FIX52 profile/selector evidence:
+//        - FIX45 found 14 useful midpoint-derived semantic connector groups
+//          outside production12; exact missing-group cover needed 4 profiles.
+//        - FIX48/FIX49 let those 4 profiles into the real graph: 188 retained
+//          added variants survived pruning.
+//        - FIX50 proved the old global-extrema-normalized knee was search-space
+//          unstable: far comfort-tail additions moved C2 despite the selected
+//          route using no added connector.
+//        - FIX51 promoted local-marginal-drop; FIX52 promoted the reproduced
+//          search-space-extension failure into permanent default test #19.
+//        - FIX52 regression run passed 22/22 and selected C1/C2/C3 used ZERO of
+//          the 4 added profiles in both RAW baselines and final routes.
+//        Therefore FIX53 restores production12, removes candidate16 attribution
+//        and FIX50 frontier/prefix/turning-angle runtime diagnostics, and keeps
+//        local-marginal-drop plus the regression test. Revisit midpoint cover
+//        only if product requirements change or new evidence shows a selected
+//        route benefits from those additional semantic groups.
 //
 // [TEST-ONLY] In-file self-test harness and synthetic fixtures (`runSelfTests`,
 //        selftest-no-horizon, geometry/road/DP fixtures).
@@ -31,8 +95,10 @@
 // - FIX35 full RAW breakpoint signatures; retained compact breakpoint metrics.
 // - FIX35 per-layer and terminal-progress rider-DP telemetry; retained final
 //   rider-DP timing/counter summaries.
-// - FIX36 verbose `rider-policy-evidence` orders/fractions; retained one compact
-//   FAST/KNEE/COMFORT Pareto summary per product class.
+// - FIX36 verbose `rider-policy-evidence` orders/fractions. A compact
+//   FAST/KNEE/COMFORT summary was retained then, and was later removed in FIX53
+//   after FIX50 selector evidence closed; production keeps only
+//   `rider-policy-selected`.
 // - FIX36 RAW frontier bottleneck/connector-physics detail; retained compact
 //   wall/transfer/road/order diagnostics for exact RAW breakpoints.
 // - FIX38 temporary 25-profile cover audit, per-profile cost/yield accounting,
@@ -83,7 +149,19 @@ import scala.util.{Try, Success, Failure}
 import ujson.*
 
 object MtbRoutePlanner:
-  val BuildId = "PRODUCT-V6-GREENFIELD1-FIX44-BLOCKER-DEAD-EVIDENCE-CLOSED"
+  val BuildId = "PRODUCT-V6-GREENFIELD1-FIX54-FREEZE-CANDIDATE"
+  val OutputGpxFiles:Vector[String] = Vector("day.gpx","day.wall-c2.gpx","day.wall-c3.gpx")
+  val OutputSummaryFile:String = "day.txt"
+  val OutputDebugFile:String = "day.debug.txt"
+  val OutputFileSet:Vector[String] = OutputGpxFiles ++ Vector(OutputSummaryFile,OutputDebugFile)
+
+  val FinalGapWarnM:Double = 100.0
+  val FinalGapFailM:Double = 250.0
+  def finalGapLevel(distanceM:Double):Int =
+    if distanceM >= FinalGapFailM then 2
+    else if distanceM >= FinalGapWarnM then 1
+    else 0
+
   val EarthR = 6371008.8
   val AvoidToleranceM = 12.0
   val Start = Point(53.472143, 9.876907, 0.0)
@@ -111,16 +189,17 @@ object MtbRoutePlanner:
   // resources that are monotone and already make RAW-baseline upgrade eligibility
   // impossible; transfer is never capped by a fixed detour budget.
   //
-  // FIX30 product policy is applied only AFTER exact search.  Among all guard-safe
-  // strict candHard upgrades we build the exact 2-D Pareto frontier
-  // (transfer, candHard).  Production selects its parameter-free knee: after
-  // normalizing the two frontier axes between the transfer-first and comfort-first
-  // extremes, maximize (fraction of available candHard improvement obtained) minus
-  // (fraction of available extra transfer spent).  This favors large early comfort
-  // gains while rejecting the extreme detours exposed by FIX29.  Linear/no-knee
-  // frontiers tie toward the faster route.  No +60/+600 window, migration route,
-  // fixed time horizon, weighted score, percentage detour budget, beam, top-K or
-  // epsilon search approximation is introduced.
+  // Rider product selection is applied only AFTER exact search. Among all
+  // guard-safe strict candHard upgrades we build the exact 2-D Pareto frontier
+  // (transfer, candHard). Since FIX51 production selects the LOCAL marginal-drop
+  // elbow: compare neighboring frontier segment slopes (candHard seconds gained
+  // per additional transfer second) and select the point immediately before the
+  // strongest local collapse in marginal benefit. Transfer and candHard share
+  // the same unit (modeled seconds), so no global endpoint normalization is
+  // required. FIX50/FIX52 established and regression-test that a far low-benefit
+  // comfort tail must not move an unchanged local elbow. No +60/+600 window,
+  // migration route, fixed time horizon, weighted score, percentage detour
+  // budget, beam, top-K or epsilon search approximation is introduced.
   //
   // ROAD POLICY (validated by FIX31/FIX32 A/B): finite unprotected-primary
   // exposure is measured road stress, not a duration-threshold hard deletion.
@@ -149,6 +228,9 @@ object MtbRoutePlanner:
   // Therefore every profile below remains necessary for preserving the current
   // useful connector-class cover, while the 13 historical audit-only profiles
   // add no new useful solver-semantic group.
+  // Production profile cover. FIX45-FIX52 midpoint evidence is recorded in
+  // the cleanup ledger above; the four audit-only additions were removed after
+  // they proved unused by RAW and final routes under the stable local selector.
   val Profiles = Vector(
     Profile(20.0, 0.25, 0.35), Profile(20.0, 0.50, 0.35), Profile(20.0, 0.90, 0.35),
     Profile(15.0, 0.05, 0.35), Profile(15.0, 0.50, 0.75), Profile(15.0, 0.90, 0.35),
@@ -2393,6 +2475,37 @@ object MtbRoutePlanner:
       frontierSize:Int
   )
 
+  case class LocalElbowSelection(
+      selected:RiderTerminal,
+      index:Int,
+      score:Double
+  )
+
+  // Production selector since FIX51. Measures the largest local
+  // drop in marginal candHard improvement per extra transfer second. Transfer
+  // and candHard are both modeled seconds, so the slope is dimensionless.
+  // Only neighboring Pareto segments are used; no far FAST/COMFORT normalization
+  // and no fixed transfer horizon are introduced.
+  def selectLocalMarginalDrop(front:Vector[RiderTerminal]):Option[LocalElbowSelection] =
+    if front.isEmpty then None
+    else if front.size<3 then Some(LocalElbowSelection(front.head,0,0.0))
+    else
+      val scored=(1 until front.size-1).toVector.map { i =>
+        val a=front(i-1); val b=front(i); val c=front(i+1)
+        val dt1=math.max(1e-12,b.transfer-a.transfer)
+        val dt2=math.max(1e-12,c.transfer-b.transfer)
+        val gain1=math.max(1e-12,a.rider.candHard-b.rider.candHard)
+        val gain2=math.max(1e-12,b.rider.candHard-c.rider.candHard)
+        val slope1=gain1/dt1
+        val slope2=gain2/dt2
+        val drop=math.log(slope1/slope2)
+        LocalElbowSelection(b,i,drop)
+      }
+      Some(scored.minBy(x => (-x.score,x.selected.transfer,x.selected.rider.candHard,productSecondaryKey(x.selected))))
+
+
+  // TEST-ONLY legacy comparator retained solely by regression #19 to prove the
+  // old global-extrema-normalized selector is tail-sensitive.
   def selectParetoKnee(candidates:Vector[RiderTerminal]):Option[KneeSelection] =
     if candidates.isEmpty then None
     else
@@ -2529,20 +2642,17 @@ object MtbRoutePlanner:
     appendLiveDebug(
       f"rider-terminal DONE $debugLabel candidates=$terminalCandidatesChecked eligible=$eligibleCandidates frontier=${tradeoffFrontier.size} bestFound=${!tradeoffFrontier.isEmpty} elapsed=${(System.nanoTime()-terminalStarted)/1e9}%.3fs"
     )
-    val kneeSelection=selectParetoKneeFromFrontier(tradeoffFrontierValues(tradeoffFrontier))
-    kneeSelection.foreach { k =>
-      val tf=k.transferFirst; val cf=k.comfortFirst; val kn=k.selected
+    val productFront=tradeoffFrontierValues(tradeoffFrontier)
+    val localSelection=selectLocalMarginalDrop(productFront)
+    val selectedFront=localSelection.map(_.selected).toVector
+    localSelection.foreach { e =>
       appendLiveDebug(
-        f"rider-policy $debugLabel frontier=${k.frontierSize}%d " +
-          f"fast=${tf.transfer}%.1f/${tf.rider.candHard}%.1f " +
-          f"knee=${kn.transfer}%.1f/${kn.rider.candHard}%.1f score=${k.score}%.4f " +
-          f"comfort=${cf.transfer}%.1f/${cf.rider.candHard}%.1f " +
-          f"fractions=transfer:${k.transferFraction}%.3f,comfort:${k.comfortFraction}%.3f"
+        f"rider-policy-selected $debugLabel policy=local-marginal-drop i=${e.index}%d " +
+          f"transfer=${e.selected.transfer}%.1f candHard=${e.selected.rider.candHard}%.1f score=${e.score}%.6f"
       )
     }
-    val selectedFront=kneeSelection.map(_.selected).toVector
     appendLiveDebug(
-      f"rider-selector DONE $debugLabel policy=pareto-knee eligible=$eligibleCandidates frontier=${tradeoffFrontier.size}%d returned=${selectedFront.size} elapsed=${(System.nanoTime()-terminalStarted)/1e9}%.3fs"
+      f"rider-selector DONE $debugLabel policy=local-marginal-drop eligible=$eligibleCandidates frontier=${tradeoffFrontier.size}%d returned=${selectedFront.size} elapsed=${(System.nanoTime()-terminalStarted)/1e9}%.3fs"
     )
     appendLiveDebug(
       f"rider-dp DONE $debugLabel eligible-terminals=$eligibleCandidates selected=${selectedFront.size} generated=$generatedLabels baselinePruned=$baselinePruned " +
@@ -2613,7 +2723,12 @@ object MtbRoutePlanner:
 
   def chooseFinal(front:Vector[RiderTerminal],baseline:RiderTerminal,classIdx:Int,classes:Vector[Double]):RiderTerminal =
     val e=front.filter(c=>eligibleUpgrade(c,baseline,classIdx,classes))
-    selectParetoKnee(e).map(_.selected).getOrElse(baseline)
+    if e.isEmpty then baseline
+    else
+      val tree=new java.util.TreeMap[java.lang.Double,RiderTerminal]()
+      e.foreach(c=>insertTradeoffFrontier(tree,c))
+      val productFront=tradeoffFrontierValues(tree)
+      selectLocalMarginalDrop(productFront).map(_.selected).getOrElse(productFront.head)
 
   def sameHorizontalPoint(a:Point,b:Point):Boolean = a.lat==b.lat && a.lon==b.lon
   def exactPoint(a:Point,b:Point):Boolean = sameHorizontalPoint(a,b) && a.ele==b.ele
@@ -2759,7 +2874,7 @@ object MtbRoutePlanner:
     val recomputedWalls=mutable.ArrayBuffer.empty[Double]
     route.connectors.foreach { c =>
       val gap=maxPointGap(c.geometry)
-      if gap>=250.0 then f+=f"${c.from}->${c.to}: connector point gap $gap%.1fm >=250m"
+      if gap>=FinalGapFailM then f+=f"${c.from}->${c.to}: connector point gap $gap%.1fm >=${FinalGapFailM}%.0fm"
       val sr=safetyReasons(c.edges,c.traceGeometry); sr.foreach(x=>f+=s"${c.from}->${c.to}: $x")
       if c.edges.isEmpty then f += s"${c.from}->${c.to}: missing trace edges"
       if c.edges.exists(e=>e.begin<0||e.end<e.begin||e.begin>=c.traceGeometry.size||e.end>=c.traceGeometry.size) then f += s"${c.from}->${c.to}: invalid edge/geometry correspondence"
@@ -2792,9 +2907,14 @@ object MtbRoutePlanner:
       if !auditClose(req,route.requiredWall) then
         f+=f"requiredWall mismatch: stored=${route.requiredWall}%.9f recomputed=$req%.9f"
       if req>ceiling then f+=f"requiredWall $req%.6f > class ceiling $ceiling%.6f"
-    finalGeom.sliding(2).foreach { case Vector(a,b) =>
-      val d=haversine(a,b); if d>=250 then f+=f"point gap $d%.1fm >=250m" else if d>=100 then w+=f"point gap $d%.1fm"
-      case _=>
+    finalGeom.sliding(2).foreach {
+      case Vector(a,b) =>
+        val d=haversine(a,b)
+        finalGapLevel(d) match
+          case 2 => f+=f"point gap $d%.1fm >=${FinalGapFailM}%.0fm"
+          case 1 => w+=f"point gap $d%.1fm"
+          case _ => ()
+      case _ => ()
     }
     AuditResult(f.toVector.distinct,w.toVector.distinct)
 
@@ -2875,7 +2995,7 @@ object MtbRoutePlanner:
       trails:Vector[Trail],
       audits:Vector[AuditResult]
   ):String =
-    val fileNames=Vector("day.gpx","day.wall-c2.gpx","day.wall-c3.gpx")
+    val fileNames=OutputGpxFiles
     val b=new StringBuilder
     b.append("MTB DAY PLAN\n============\n")
     b.append(s"Planner build: $BuildId\n\n")
@@ -3126,16 +3246,16 @@ object MtbRoutePlanner:
                               )
 
                             val writes=Vector[Result[Unit]](
-                              writeGpx(output.resolve("day.gpx"),"DAY-C1",geometries(0)),
-                              writeGpx(output.resolve("day.wall-c2.gpx"),"DAY-C2",geometries(1)),
-                              writeGpx(output.resolve("day.wall-c3.gpx"),"DAY-C3",geometries(2)),
+                              writeGpx(output.resolve(OutputGpxFiles(0)),"DAY-C1",geometries(0)),
+                              writeGpx(output.resolve(OutputGpxFiles(1)),"DAY-C2",geometries(1)),
+                              writeGpx(output.resolve(OutputGpxFiles(2)),"DAY-C3",geometries(2)),
                               boundary("write day.txt") {
-                                Files.writeString(output.resolve("day.txt"),summary,StandardCharsets.UTF_8)
+                                Files.writeString(output.resolve(OutputSummaryFile),summary,StandardCharsets.UTF_8)
                                 ()
                               },
                               boundary("write day.debug.txt") {
                                 diag.timings+=("total"->((System.nanoTime()-started)/1e9))
-                                val debugPath=output.resolve("day.debug.txt")
+                                val debugPath=output.resolve(OutputDebugFile)
                                 val livePrefix =
                                   if Files.isRegularFile(debugPath) then Files.readString(debugPath,StandardCharsets.UTF_8)
                                   else ""
@@ -3323,70 +3443,119 @@ object MtbRoutePlanner:
 
   def runSelfTests(input:Option[Path]):TestState =
     val ts=TestState()
-    ts.test("NFC identity") {assertT(nfc("Feuerlo\u0308scher")=="Feuerlöscher")}
-    ts.test("demanding whole-trail classification") {
-      val p = syntheticLine(100,100,70,wiggle=true)
-      val d = demandingMeasurements(p)
-      assertT(d.wholeGradePct >= 10.0, s"wholeGrade=${d.wholeGradePct}")
-      assertT(d.wholeSinuosity >= 1.10, s"wholeSinuosity=${d.wholeSinuosity}")
-      assertT(d.demanding)
+
+    // 1. CLI execution contract.
+    ts.test("CLI tests run by default; --no-test skips; --self-test is removed") {
+      parseCli(Array.empty) match
+        case Right(c) => assertT(c.runTests,"tests must run by default")
+        case Left(problem) => assertT(false,problem)
+      parseCli(Array("--no-test")) match
+        case Right(c) => assertT(!c.runTests,"--no-test must skip tests")
+        case Left(problem) => assertT(false,problem)
+      assertT(parseCli(Array("--self-test")).isLeft,"removed --self-test unexpectedly accepted")
     }
-    ts.test("whole-trail demanding grade uses ridden length, not chord") {
+
+    // 2. Canonical input/data identity contract.
+    ts.test("canonical input counts, NFC identities and demanding set") {
+      input match
+        case None => assertT(false,"default tests require --input for canonical input regression")
+        case Some(in) =>
+          loadInputs(in) match
+            case Left(problem) => assertT(false,problem)
+            case Right((tr,av,real)) =>
+              assertT(tr.size==10,s"mandatory=${tr.size}")
+              assertT(av.size==10,s"avoid=${av.size}")
+              assertT(real.size==4,s"real=${real.size}")
+              val ids=tr.map(_.name)
+              assertT(ids.distinct.size==ids.size,s"duplicate mandatory identities: $ids")
+              assertT(ids.forall(x=>nfc(x)==x),"mandatory identity is not NFC canonical")
+              assertT(nfc("Feuerlo\u0308scher")=="Feuerlöscher")
+              val got=tr.filter(_.demanding.demanding).map(_.name).toSet
+              val exp=Set("Feuerlöscher","LittleWhistlerB")
+              assertT(got==exp,s"got ${got.toVector.sorted.mkString(",")}, expected ${exp.toVector.sorted.mkString(",")}")
+    }
+
+    // 3. Demanding whole-trail semantics and ridden-length normalization.
+    ts.test("demanding whole-trail classification uses ridden length") {
+      val demanding=syntheticLine(100,100,70,wiggle=true)
+      val dd=demandingMeasurements(demanding)
+      assertT(dd.wholeGradePct>=10.0,s"wholeGrade=${dd.wholeGradePct}")
+      assertT(dd.wholeSinuosity>=1.10,s"wholeSinuosity=${dd.wholeSinuosity}")
+      assertT(dd.demanding)
+
       val p=syntheticLine(100,100,89,wiggle=true)
       val d=demandingMeasurements(p)
-      val cum=cumulative(p)
-      val expected=100.0*11.0/cum.last
+      val expected=100.0*11.0/cumulative(p).last
       near(d.wholeGradePct,expected,1e-6)
-      assertT(d.wholeGradePct < 11.0,s"grade unexpectedly chord-normalized: ${d.wholeGradePct}")
+      assertT(d.wholeGradePct<11.0,s"grade unexpectedly chord-normalized: ${d.wholeGradePct}")
     }
-    ts.test("road primary duration uses rider physics, not edge speed") {
+
+    // 4. Local demanding-window semantics.
+    ts.test("demanding local 60m and 100m windows are independent") {
+      val d60=demandingMeasurements(syntheticLocalDemand(60,11.4))
+      assertT(d60.local60Pass)
+      assertT(!d60.local100Pass)
+      assertT(!(d60.wholeGradePct>=10 && d60.wholeSinuosity>=1.10))
+
+      val d100=demandingMeasurements(syntheticLocalDemand(100,16.0))
+      assertT(d100.local100Pass)
+      assertT(!d100.local60Pass)
+      assertT(!(d100.wholeGradePct>=10 && d100.wholeSinuosity>=1.10))
+    }
+
+    // 5. Road policy: finite primary is scored, true forbidden classes stay hard.
+    ts.test("road policy separates hard invalid roads from scored primary exposure") {
       val geom=syntheticLine(120,100,100)
-      val e=EdgeAttr("e",0,geom.size-1,120.0,100.0,"primary","road","paved","no",false,Double.NaN)
-      val run=EdgeRun(Vector(e),0,geom.size-1)
-      val modeled=modeledRunSeconds(geom,run)
-      assertT(modeled > e.seconds*2.0,s"modeled=$modeled edgeSpeed=${e.seconds}")
-      assertT(safetyReasons(Vector(e),geom).isEmpty,s"finite primary exposure unexpectedly hard-rejected: ${safetyReasons(Vector(e),geom)}")
-      assertT(roadStress(Vector(e),geom) > 0.0,"finite primary exposure must remain scored as road stress")
-    }
-    ts.test("cycle_lane none is unprotected") {
+      val primary=EdgeAttr("e",0,geom.size-1,120.0,100.0,"primary","road","paved","no",false,Double.NaN)
+      val modeled=modeledRunSeconds(geom,EdgeRun(Vector(primary),0,geom.size-1))
+      assertT(modeled>primary.seconds*2.0,s"modeled=$modeled edgeSpeed=${primary.seconds}")
+      assertT(safetyReasons(Vector(primary),geom).isEmpty,s"finite primary unexpectedly hard-rejected: ${safetyReasons(Vector(primary),geom)}")
+      assertT(roadStress(Vector(primary),geom)>0.0,"finite primary must remain scored")
+
+      val motorway=primary.copy(id="m",roadClass="motorway")
+      val trunk=primary.copy(id="t",roadClass="trunk")
+      assertT(safetyReasons(Vector(motorway),geom).contains("motorway"))
+      assertT(safetyReasons(Vector(trunk),geom).contains("trunk"))
       assertT(!protectedCycle("none"))
       assertT(!protectedCycle("no"))
       assertT(!protectedCycle("shared"))
       assertT(protectedCycle("dedicated"))
     }
-    ts.test("physics uses 30m grade chunks") {
+
+    // 6. Transfer physics contract.
+    ts.test("transfer physics uses 30m grade chunks and downhill coasting") {
       val origin=Point(53.0,10.0,100.0)
       def east(m:Double,ele:Double)=Point(
         origin.lat,
         origin.lon+math.toDegrees(m/(EarthR*math.cos(math.toRadians(origin.lat)))),
         ele
       )
-      // A fake 10 m DEM spike should disappear when the 30 m production
-      // physics window is used; pointwise physics would create a huge >180 W streak.
-      val p=Vector(east(0,100),east(10,106),east(20,100),east(30,100))
-      val m=physics(p,0.010)
-      near(m.streak180.localMax,0.0,1e-9)
-    }
-    ts.test("downhill transfer coasts") {
+      val spike=Vector(east(0,100),east(10,106),east(20,100),east(30,100))
+      near(physics(spike,0.010).streak180.localMax,0.0,1e-9)
+
       val ride=segmentRide(-0.10,0.010,None)
       assertT(ride.coasting,s"ride=$ride")
       near(ride.riderPowerW,0.0,1e-12)
     }
-    ts.test("demanding 60m local classification") {val d=demandingMeasurements(syntheticLocalDemand(60,11.4));assertT(d.local60Pass);assertT(!(d.wholeGradePct>=10&&d.wholeSinuosity>=1.10));assertT(!d.local100Pass)}
-    ts.test("demanding 100m local classification") {val d=demandingMeasurements(syntheticLocalDemand(100,16.0));assertT(d.local100Pass);assertT(!d.local60Pass);assertT(!(d.wholeGradePct>=10&&d.wholeSinuosity>=1.10))}
-    ts.test("canonical demanding set regression") {
-      input match
-        case None => assertT(false,"default tests require --input for canonical demanding regression")
-        case Some(in) =>
-          loadInputs(in) match
-            case Left(problem) => assertT(false,problem)
-            case Right((tr,_,_)) =>
-              val got=tr.filter(_.demanding.demanding).map(_.name).toSet
-              val exp=Set("Feuerlöscher","LittleWhistlerB")
-              assertT(got==exp,s"got ${got.toVector.sorted.mkString(",")}, expected ${exp.toVector.sorted.mkString(",")}")
+
+    // 7. All independent hard wall boundaries.
+    ts.test("hard wall thresholds are 27pct/30m, 20pct/100m and 180W/90s") {
+      assertT(WallMetrics(27.0,0.0,0.0).hardInvalid)
+      assertT(WallMetrics(0.0,20.0,0.0).hardInvalid)
+      assertT(WallMetrics(0.0,0.0,90.0).hardInvalid)
+      assertT(!WallMetrics(26.999,19.999,89.999).hardInvalid)
+      val comfort=RiderMetrics(90,90,90,90,Streak.constant(90,true),Streak.constant(90,true),Streak.constant(90,true),1)
+      assertT(comfort.candHard>0)
     }
-    ts.test("streak concatenation across boundary") {val a=Streak(0,4,4,false,10);val b=Streak(5,0,5,false,10);near(a.concat(b).localMax,9)}
-    ts.test("180W/90s independent hard safety") {val w=WallMetrics(5,5,90);assertT(w.hardInvalid);val comfort=RiderMetrics(90,90,90,90,Streak.constant(90,true),Streak.constant(90,true),Streak.constant(90,true),1);assertT(comfort.candHard>0)}
+
+    // 8. Streaks must concatenate across connector/mandatory boundaries.
+    ts.test("streak concatenation crosses component boundaries") {
+      val a=Streak(0,4,4,false,10)
+      val b=Streak(5,0,5,false,10)
+      near(a.concat(b).localMax,9)
+    }
+
+    // 9. Real-ride evidence remains directional.
     ts.test("real-ride wall evidence is directional") {
       val candidate=syntheticLine(100,0,10,wiggle=false)
       val forward=forwardEvidenceLocalGrade(candidate,candidate,100.0)
@@ -3394,59 +3563,59 @@ object MtbRoutePlanner:
       assertT(forward.nonEmpty,"forward local evidence failed to match")
       assertT(reverse.isEmpty,"reversed local evidence was incorrectly accepted")
     }
-    ts.test("protected corridor geometry invariants") {
-      val origin = Point(53.0, 10.0, 0.0)
+
+    // 10. Correct continuous tube geometry incl. historical empty-intersection regression.
+    ts.test("protected corridor continuous tube geometry invariants") {
+      val origin = Point(53.0,10.0,0.0)
       def metres(x:Double,y:Double) = Point(
         origin.lat + math.toDegrees(y / EarthR),
         origin.lon + math.toDegrees(x / (EarthR * math.cos(math.toRadians(origin.lat)))),
         0.0
       )
       def closeMeters(a:Double,b:Double,tol:Double=0.05):Unit =
-        assertT(math.abs(a-b) <= tol, f"$a%.4f != $b%.4f within $tol%.3f m")
+        assertT(math.abs(a-b)<=tol,f"$a%.4f != $b%.4f within $tol%.3f m")
 
-      val corridor = Vector(metres(-20,0), metres(50,0))
-      val boundary = Vector(metres(0,12.1), metres(7.5,6), metres(15,6), metres(22.5,12.1))
-      val perpendicular = Vector(metres(10,-20), metres(10,20))
-      val oblique = Vector(metres(-2,-14), metres(26,14))
-      val forward = Vector(metres(0,0), metres(30,0))
-      val outside = Vector(metres(0,12.1), metres(30,12.1))
-      val inside = Vector(metres(0,11.9), metres(30,11.9))
+      val corridor=Vector(metres(-20,0),metres(50,0))
+      val boundary=Vector(metres(0,12.1),metres(7.5,6),metres(15,6),metres(22.5,12.1))
+      val perpendicular=Vector(metres(10,-20),metres(10,20))
+      val oblique=Vector(metres(-2,-14),metres(26,14))
+      val forward=Vector(metres(0,0),metres(30,0))
+      val outside=Vector(metres(0,12.1),metres(30,12.1))
+      val inside=Vector(metres(0,11.9),metres(30,11.9))
 
-      assertT(continuousCoTravel(boundary,corridor,12.0) > 20.0,"boundary clipping lost in-tube travel")
-      assertT(continuousCoTravel(perpendicular,corridor,12.0) < 1e-6,"perpendicular crossing counted as co-travel")
-      assertT(continuousCoTravel(oblique,corridor,12.0) < 1e-6,"oblique crossing counted as co-travel")
-      assertT(continuousCoTravel(forward,corridor,12.0) > 29.0,"forward corridor travel not detected")
+      assertT(continuousCoTravel(boundary,corridor,12.0)>20.0)
+      assertT(continuousCoTravel(perpendicular,corridor,12.0)<1e-6)
+      assertT(continuousCoTravel(oblique,corridor,12.0)<1e-6)
+      assertT(continuousCoTravel(forward,corridor,12.0)>29.0)
       closeMeters(continuousCoTravel(forward,corridor,12.0),continuousCoTravel(forward.reverse,corridor,12.0))
-      assertT(continuousCoTravel(outside,corridor,12.0) < 1e-6,"outside parallel line counted")
-      assertT(continuousCoTravel(inside,corridor,12.0) > 29.0,"inside parallel line missed")
+      assertT(continuousCoTravel(outside,corridor,12.0)<1e-6)
+      assertT(continuousCoTravel(inside,corridor,12.0)>29.0)
 
-      val splitForward = (0 to 6).map(i => metres(i * 5.0, 0)).toVector
-      val splitCorridor = Vector(metres(-20,0),metres(0,0),metres(15,0),metres(50,0))
+      val splitForward=(0 to 6).map(i=>metres(i*5.0,0)).toVector
+      val splitCorridor=Vector(metres(-20,0),metres(0,0),metres(15,0),metres(50,0))
       closeMeters(continuousCoTravel(forward,corridor,12.0),continuousCoTravel(splitForward,corridor,12.0))
       closeMeters(continuousCoTravel(forward,corridor,12.0),continuousCoTravel(forward,splitCorridor,12.0))
 
-      val blocker = coTravelBlockPoint(boundary,corridor,12.0,boundary.head,boundary.last)
-      assertT(blocker.nonEmpty,"hard co-travel did not produce a route-derived blocker")
-      assertT(math.min(haversine(blocker.get,boundary.head),haversine(blocker.get,boundary.last)) > 5.0,"blocker collapsed onto connector endpoint")
+      val blocker=coTravelBlockPoint(boundary,corridor,12.0,boundary.head,boundary.last)
+      assertT(blocker.nonEmpty,"hard co-travel did not produce a blocker")
+      assertT(math.min(haversine(blocker.get,boundary.head),haversine(blocker.get,boundary.last))>5.0)
 
-      // Regression discovered while independently checking the historical
-      // matcher: OLD can turn an empty rectangle-band intersection into a
-      // non-empty interval by sorting (lo,hi) after max/min intersection.
-      // The corrected exact-capsule implementation must reject this shape.
-      val oldBugRoute = Vector(
-        metres(0,0), metres(10,-20), metres(-20,-50), metres(-15,-50), metres(-5,-70)
+      val oldBugRoute=Vector(
+        metres(0,0),metres(10,-20),metres(-20,-50),metres(-15,-50),metres(-5,-70)
       )
-      val oldBugCorridor = Vector(
-        metres(0,0), metres(-5,5), metres(15,0), metres(5,30), metres(25,60)
+      val oldBugCorridor=Vector(
+        metres(0,0),metres(-5,5),metres(15,0),metres(5,30),metres(25,60)
       )
-      val correctedBugCase = continuousCoTravel(oldBugRoute,oldBugCorridor,12.0)
-      assertT(correctedBugCase < 1e-6,f"corrected matcher false-positive=$correctedBugCase%.3fm")
+      val corrected=continuousCoTravel(oldBugRoute,oldBugCorridor,12.0)
+      assertT(corrected<1e-6,f"corrected matcher false-positive=$corrected%.3fm")
     }
+
+    // 11. Safety result must not depend on raw Valhalla vertex segmentation.
     ts.test("corridor safety sampling canonicalizes raw segmentation") {
-      val origin = Point(53.0, 10.0, 0.0)
-      def metres(x:Double,y:Double) = Point(
-        origin.lat + math.toDegrees(y / EarthR),
-        origin.lon + math.toDegrees(x / (EarthR * math.cos(math.toRadians(origin.lat)))),
+      val origin=Point(53.0,10.0,0.0)
+      def metres(x:Double,y:Double)=Point(
+        origin.lat+math.toDegrees(y/EarthR),
+        origin.lon+math.toDegrees(x/(EarthR*math.cos(math.toRadians(origin.lat)))),
         0.0
       )
       val corridor=Vector(metres(-20,0),metres(80,0))
@@ -3455,41 +3624,117 @@ object MtbRoutePlanner:
       val a=continuousCoTravel(corridorSafetyGeometry(raw),corridor,12.0)
       val b=continuousCoTravel(corridorSafetyGeometry(alreadyDense),corridor,12.0)
       near(a,b,0.05)
-      assertT(a > 59.0,s"canonical safety sampling lost parallel co-travel: $a")
+      assertT(a>59.0,s"canonical safety sampling lost parallel co-travel: $a")
     }
 
+    // 12. Exact graph semantics must not collapse nearby-but-different elevation.
     ts.test("semantic connector duplicate is bit exact") {
-      def c(id:String,ele:Double)=Connector(id,"a","b",Profiles.head,Vector(Point(0,0,0),Point(0,0.001,ele)),Vector(Point(0,0,0),Point(0,0.001,ele)),10,Vector.empty,1,1,0.01,RiderMetrics.Empty,WallMetrics(0,0,0),.2,0,.2,Vector.empty,Vector.empty,Vector.empty)
-      val a=c("a",10.0000); val b=c("b",10.0004)
-      assertT(semanticKey(a)!=semanticKey(b),"nearby elevation was incorrectly rounded into semantic equality")
+      def c(id:String,ele:Double)=Connector(
+        id,"a","b",Profiles.head,
+        Vector(Point(0,0,0),Point(0,0.001,ele)),
+        Vector(Point(0,0,0),Point(0,0.001,ele)),
+        10,Vector.empty,1,1,0.01,RiderMetrics.Empty,WallMetrics(0,0,0),
+        .2,0,.2,Vector.empty,Vector.empty,Vector.empty
+      )
+      assertT(semanticKey(c("a",10.0000))!=semanticKey(c("b",10.0004)),
+        "nearby elevation was incorrectly rounded into semantic equality")
     }
-    ts.test("reconstruction keeps canonical mandatory elevation at duplicate stitch") {
-      val mandatory=Trail("T",Vector(Point(0,0.001,42),Point(0,0.002,41)),DemandingMeasurements(0,1,0,1,false,0,1,false),RiderMetrics.Empty)
-      def conn(id:String,from:String,to:String,ps:Vector[Point])=Connector(id,from,to,Profiles.head,ps,ps,1,Vector.empty,0,0,0.01,RiderMetrics.Empty,WallMetrics(0,0,0),0,0,0,Vector.empty,Vector.empty,Vector.empty)
-      val enter=conn("e","START","T",Vector(Point(0,0,0),Point(0,0.001,99)))
-      val finish=conn("f","T","FINISH_LOOP",Vector(Point(0,0.002,77),Point(0,0.003,0)))
-      val route=RiderTerminal(Mode.LOOP,2,0,0,RiderMetrics.Empty,ClimbState.Empty,0,0,Vector(0),Vector(enter,finish),"r")
-      val out=reconstruct(route,Vector(mandatory))
-      assertT(countSubsequence(out,mandatory.points)==1,s"mandatory sequence count=${countSubsequence(out,mandatory.points)}")
-      assertT(out.count(p=>p.lat==0 && p.lon==0.001)==1,"duplicate entry coordinate remained")
+
+    // 13. RAW DP must enumerate a complete exact-once mandatory order.
+    ts.test("RAW DP visits every mandatory exactly once") {
+      val dm=DemandingMeasurements(0,1,0,1,false,0,1,false)
+      def tr(name:String,x:Double)=Trail(
+        name,Vector(Point(53.0,10.0+x,100),Point(53.0,10.00001+x,100)),
+        dm,RiderMetrics.Empty
+      )
+      val trails=Vector(tr("A",0.0),tr("B",0.001),tr("C",0.002))
+      def c(id:String,from:String,to:String,sec:Double)=
+        val ps=Vector(Point(53,10,100),Point(53,10.00001,100))
+        val rm=RiderMetrics(sec,0,0,0,Streak.Empty,Streak.Empty,Streak.Empty,0)
+        Connector(id,from,to,Profiles.head,ps,ps,sec,Vector.empty,sec,0,0.01,
+          rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty,Vector.empty,Vector.empty)
+
+      val g=Map[(String,String),Vector[Connector]](
+        ("START","A")->Vector(c("sa","START","A",1)),
+        ("START","B")->Vector(c("sb","START","B",10)),
+        ("A","B")->Vector(c("ab","A","B",1)),
+        ("A","C")->Vector(c("ac","A","C",10)),
+        ("B","A")->Vector(c("ba","B","A",10)),
+        ("B","C")->Vector(c("bc","B","C",1)),
+        ("C","A")->Vector(c("ca","C","A",10)),
+        ("C","B")->Vector(c("cb","C","B",10)),
+        ("C","FINISH_LOOP")->Vector(c("cf","C","FINISH_LOOP",1)),
+        ("A","FINISH_LOOP")->Vector(c("af","A","FINISH_LOOP",10)),
+        ("B","FINISH_LOOP")->Vector(c("bf","B","FINISH_LOOP",10))
+      )
+      val front=rawDp(Mode.LOOP,trails,g)
+      assertT(front.nonEmpty,"RAW DP returned no complete route")
+      val best=front.minBy(_.transfer)
+      assertT(best.order==Vector(0,1,2),s"best order=${best.order}")
+      assertT(best.order.distinct.size==3 && best.order.toSet==Set(0,1,2))
     }
-    ts.test("wall breakpoint sweep") {
+
+    // 14. Reconstruction: canonical GPXs independently mandatory exactly once, supplied direction.
+    ts.test("reconstruction preserves every mandatory exactly once in supplied direction") {
+      val dm=DemandingMeasurements(0,1,0,1,false,0,1,false)
+      val a=Trail("A",Vector(Point(0,0.001,42),Point(0,0.002,41)),dm,RiderMetrics.Empty)
+      val b=Trail("B",Vector(Point(0,0.004,52),Point(0,0.005,51)),dm,RiderMetrics.Empty)
+      val trails=Vector(a,b)
+      def conn(id:String,from:String,to:String,ps:Vector[Point])=Connector(
+        id,from,to,Profiles.head,ps,ps,1,Vector.empty,0,0,0.01,
+        RiderMetrics.Empty,WallMetrics(0,0,0),0,0,0,Vector.empty,Vector.empty,Vector.empty
+      )
+      val enterB=conn("e","START","B",Vector(Point(0,0,0),Point(0,0.004,999)))
+      val bToA=conn("ba","B","A",Vector(Point(0,0.005,888),Point(0,0.003,70),Point(0,0.001,777)))
+      val finishA=conn("f","A","FINISH_LOOP",Vector(Point(0,0.002,666),Point(0,0.006,0)))
+      val route=RiderTerminal(
+        Mode.LOOP,0,0,0,RiderMetrics.Empty,ClimbState.Empty,0,0,
+        Vector(1,0),Vector(enterB,bToA,finishA),"r"
+      )
+      val out=reconstruct(route,trails)
+      trails.foreach { t =>
+        assertT(countSubsequence(out,t.points)==1,s"${t.name} forward count=${countSubsequence(out,t.points)}")
+        assertT(countSubsequence(out,t.points.reverse)==0,s"${t.name} reversed mandatory sequence present")
+        t.points.foreach(p=>assertT(out.count(q=>exactPoint(q,p))==1,s"${t.name} canonical point/elevation not unique: $p"))
+      }
+      assertT(out.indexOf(b.points.head)<out.indexOf(a.points.head),"supplied solver order was not preserved")
+    }
+
+    // 15. RAW class derivation contract.
+    ts.test("wall breakpoint sweep preserves useful wall/order changes") {
       val f=Vector(
         RawTerminal(Mode.LOOP,.2,500,10,Vector(0),Vector(),"a"),
         RawTerminal(Mode.LOOP,.3,300,10,Vector(0),Vector(),"b"),
         RawTerminal(Mode.LOOP,.4,290,5,Vector(1),Vector(),"c")
       )
-      val b=breakpoints(f)
-      assertT(b.map(_.ceiling)==Vector(.2,.3,.4))
+      assertT(breakpoints(f).map(_.ceiling)==Vector(.2,.3,.4))
     }
-    ts.test("endpoint assignment") {
+
+    // 16. Product requires exactly two LOOP classes and C3 P2P for this fixture.
+    ts.test("endpoint assignment chooses exactly one P2P class") {
       def r(m:Mode,w:Double,t:Double,s:String)=RawTerminal(m,w,t,0,Vector(),Vector(),s)
-      val c=Vector(.2,.3,.4);val l=Vector(r(Mode.LOOP,.2,10,"l1"),r(Mode.LOOP,.3,9,"l2"),r(Mode.LOOP,.4,8,"l3"));val p=Vector(r(Mode.P2P,.2,20,"p1"),r(Mode.P2P,.3,15,"p2"),r(Mode.P2P,.4,5,"p3"))
+      val c=Vector(.2,.3,.4)
+      val l=Vector(r(Mode.LOOP,.2,10,"l1"),r(Mode.LOOP,.3,9,"l2"),r(Mode.LOOP,.4,8,"l3"))
+      val p=Vector(r(Mode.P2P,.2,20,"p1"),r(Mode.P2P,.3,15,"p2"),r(Mode.P2P,.4,5,"p3"))
       chooseAssignment(c,l,p) match
-        case Some((_,a)) => assertT(a.p2pIndex==2)
+        case Some((all,a)) =>
+          assertT(all.size==3)
+          assertT(a.modes.count(_==Mode.P2P)==1)
+          assertT(a.modes.count(_==Mode.LOOP)==2)
+          assertT(a.p2pIndex==2)
         case None => assertT(false,"assignment unexpectedly infeasible")
     }
-    ts.test("incremental climb-shape update") {var c=ClimbState.Empty;c=c.add(99,0).add(88,1).add(10,2).add(20,3).add(15,4);near(c.maxAscent,20);near(c.upward,10);near(c.roughness,15)}
+
+    // 17. Incremental climb metrics are continuation-state semantics for exact DP.
+    ts.test("incremental climb-shape update") {
+      var c=ClimbState.Empty
+      c=c.add(99,0).add(88,1).add(10,2).add(20,3).add(15,4)
+      near(c.maxAscent,20)
+      near(c.upward,10)
+      near(c.roughness,15)
+    }
+
+    // 18. Independent final audit must recompute technical mandatory physics with the downhill cap.
     ts.test("audit rider recomputation preserves technical mandatory policy") {
       val mandatoryPoints=syntheticLine(120,120,90)
       val mandatoryRider=physics(mandatoryPoints,0.010,Some(TrailDownhillMaxKph))
@@ -3502,52 +3747,157 @@ object MtbRoutePlanner:
         val ps=Vector(Point(53.0,10.0,100),Point(53.0,10.00001,100))
         val rm=physics(ps,0.010)
         Connector(
-          id,from,to,Profiles.head,
-          ps,ps,
-          1,Vector.empty,rm.duration,0,0.01,rm,WallMetrics(0,0,0),
-          0,0,0,Vector.empty,Vector.empty,Vector.empty
+          id,from,to,Profiles.head,ps,ps,1,Vector.empty,rm.duration,0,0.01,
+          rm,WallMetrics(0,0,0),0,0,0,Vector.empty,Vector.empty,Vector.empty
         )
       val enter=conn("e","START","T")
       val finish=conn("f","T","FINISH_LOOP")
       val stored=enter.rider.concat(mandatory.rider).concat(finish.rider)
       val route=RiderTerminal(Mode.LOOP,0,0,0,stored,ClimbState.Empty,0,0,Vector(0),Vector(enter,finish),"r")
       assertT(auditSameRider(recomputeRouteRider(route,Vector(mandatory)),stored))
-      assertT(!auditSameRider(physics(mandatoryPoints,0.010),mandatoryRider),"fixture must distinguish transfer vs technical downhill physics")
+      assertT(!auditSameRider(physics(mandatoryPoints,0.010),mandatoryRider),
+        "fixture must distinguish transfer vs technical downhill physics")
     }
-    ts.test("exact no-horizon rider search + Pareto-knee final selector") {
+
+    // 19. No fixed search horizon + local marginal-drop post-search selector.
+    ts.test("exact no-horizon rider search + local marginal-drop selector") {
       val st=Streak.constant(1.0,false)
       def rt(sig:String,t:Double,ch:Double)=
-        RiderTerminal(Mode.LOOP,t,0,.2,RiderMetrics(t,ch,0,0,st,st,st,0),ClimbState.Empty,0,0,Vector(),Vector(),sig)
-      val baseline=rt("baseline",10,10)
+        RiderTerminal(
+          Mode.LOOP,t,0,.2,
+          RiderMetrics(t,ch,0,0,st,st,st,0),
+          ClimbState.Empty,0,0,Vector(),Vector(),sig
+        )
+      val baseline=rt("baseline",0,120)
+      val p0=rt("p0",10,100)
+      val p1=rt("p1",20,80)
+      val elbow=rt("elbow",30,60)
+      val tail1=rt("tail1",100,59)
+      val tail2=rt("tail2",1000,58.5)
+      assertT(
+        chooseFinal(Vector(p0,p1,elbow,tail1),baseline,0,Vector(.3,.4,.5)).signature=="elbow",
+        "local marginal selector must choose the point before the sharp benefit collapse"
+      )
+      assertT(
+        chooseFinal(Vector(p0,p1,elbow,tail1,tail2),baseline,0,Vector(.3,.4,.5)).signature=="elbow",
+        "far low-benefit comfort tail must not move this local elbow fixture"
+      )
 
-      // Product selector contract: exact frontier, no detour window.  A large early
-      // comfort gain is the knee; an extreme final gain is not selected merely
-      // because it has the absolute minimum candHard.
-      val nearFast=rt("near",11,9.9)
-      val knee=rt("knee",20,6.0)
-      val comfortExtreme=rt("comfort-extreme",1010,5.0)
-      assertT(chooseFinal(Vector(nearFast,knee,comfortExtreme),baseline,0,Vector(.3,.4,.5)).signature=="knee")
+      // FIX50/FIX51 regression: use a compact rounded projection of the real C2
+      // frontier. The old global-extrema-normalized knee MUST move when a far
+      // comfort endpoint is appended; this proves the fixture actually captures
+      // the historical failure. The local marginal selector MUST NOT move because
+      // the added point does not change the adjacent segments around its elbow.
+      val gFast=rt("g-fast",6279.661,1385.969)
+      val gEarly=rt("g-early",6415.052,1244.221)
+      val gElbow=rt("g-elbow",6443.442,1179.960)
+      val gOldComfort=rt("g-old-comfort",8606.336,637.267)
+      val gFarComfort=rt("g-far-comfort",9933.077,571.948)
+      val regressionBase=Vector(gFast,gEarly,gElbow,gOldComfort)
+      val regressionExtended=regressionBase :+ gFarComfort
 
-      // Search contract: prove the same no-horizon property inside riderDp itself,
-      // so a future fixed transfer ceiling cannot hide behind a correct post-selector.
+      val oldGlobalBase=selectParetoKnee(regressionBase).get.selected.signature
+      val oldGlobalExtended=selectParetoKnee(regressionExtended).get.selected.signature
+      assertT(
+        oldGlobalBase != oldGlobalExtended,
+        "fixture must reproduce the old global-extrema knee search-space-extension instability"
+      )
+
+      val localBase=selectLocalMarginalDrop(regressionBase).get.selected.signature
+      val localExtended=selectLocalMarginalDrop(regressionExtended).get.selected.signature
+      assertT(localBase=="g-elbow", "fixture local elbow must be the intended middle point")
+      assertT(
+        localExtended==localBase,
+        "far low-benefit comfort-tail extension must not move an unchanged local elbow"
+      )
+
       val dm=DemandingMeasurements(0,1,0,1,false,0,1,false)
       val trail=Trail("T",Vector(Point(53,10,100),Point(53,10.00001,100)),dm,RiderMetrics.Empty)
       def c(id:String,from:String,to:String,duration:Double,candHard:Double)=
         val ps=Vector(Point(53,10,100),Point(53,10.00001,100))
-        val rm=RiderMetrics(duration,candHard,0,0,Streak.constant(duration,false),Streak.constant(duration,false),Streak.constant(duration,false),0)
-        Connector(id,from,to,Profiles.head,ps,ps,duration,Vector.empty,0,0,0.01,rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty,Vector.empty,Vector.empty)
+        val rm=RiderMetrics(
+          duration,candHard,0,0,
+          Streak.constant(duration,false),Streak.constant(duration,false),Streak.constant(duration,false),0
+        )
+        Connector(
+          id,from,to,Profiles.head,ps,ps,duration,Vector.empty,0,0,0.01,
+          rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty,Vector.empty,Vector.empty
+        )
+      val noHorizonBaseline=rt("no-horizon-baseline",10,10)
       val start=c("slow-comfort","START","T",1010,5)
       val finish=c("finish","T","FINISH_LOOP",0,0)
-      val front=riderDp(Mode.LOOP,.3,None,baseline,"selftest-no-horizon",Vector(trail),Map(("START","T")->Vector(start),("T","FINISH_LOOP")->Vector(finish)))
+      val front=riderDp(
+        Mode.LOOP,.3,None,noHorizonBaseline,"selftest-no-horizon",
+        Vector(trail),Map(("START","T")->Vector(start),("T","FINISH_LOOP")->Vector(finish))
+      )
       assertT(front.size==1)
       assertT(front.head.transfer>=1000)
       assertT(front.head.rider.candHard==5)
     }
-    ts
 
+    // 20. Comfort upgrades may not silently worsen guarded product/safety resources.
+    ts.test("rider product selector preserves guardrails while improving candHard") {
+      val baseStreak=Streak.constant(10,false)
+      val base=RiderTerminal(
+        Mode.LOOP,100,10,.3,
+        RiderMetrics(100,20,0,0,baseStreak,baseStreak,baseStreak,10),
+        ClimbState(0,10,10,10,None,None),
+        2,1,Vector(),Vector(),"base"
+      )
+      def candidate(sig:String,road:Double,spike:Double,maxAscent:Double)=
+        RiderTerminal(
+          Mode.LOOP,110,road,.3,
+          RiderMetrics(110,10,0,0,baseStreak,baseStreak,baseStreak,spike),
+          ClimbState(0,maxAscent,10,10,None,None),
+          2,1,Vector(),Vector(),sig
+        )
+      assertT(eligibleUpgrade(candidate("good",10,10,10),base,0,Vector(.3,.4,.5)))
+      assertT(!eligibleUpgrade(candidate("road-worse",11,10,10),base,0,Vector(.3,.4,.5)))
+      assertT(!eligibleUpgrade(candidate("spike-worse",10,11,10),base,0,Vector(.3,.4,.5)))
+      assertT(!eligibleUpgrade(candidate("climb-worse",10,10,11),base,0,Vector(.3,.4,.5)))
+    }
+
+    // 21. Human-facing output and exact output-file surface are product contracts.
+    ts.test("human report and exact five output filenames remain stable") {
+      assertT(OutputFileSet==Vector(
+        "day.gpx","day.wall-c2.gpx","day.wall-c3.gpx","day.txt","day.debug.txt"
+      ),s"output files=$OutputFileSet")
+
+      val dm=DemandingMeasurements(0,1,0,1,false,0,1,false)
+      val trail=Trail("T",Vector(Start,Start),dm,RiderMetrics.Empty)
+      def rt(mode:Mode,sig:String)=RiderTerminal(
+        mode,0,0,.2,RiderMetrics.Empty,ClimbState.Empty,0,0,Vector(0),Vector(),sig
+      )
+      val finals=Vector(rt(Mode.LOOP,"c1"),rt(Mode.LOOP,"c2"),rt(Mode.P2P,"c3"))
+      val assignment=Assignment(
+        Vector(.2,.3,.4),Vector(Mode.LOOP,Mode.LOOP,Mode.P2P),Vector.empty
+      )
+      val report=humanReport(
+        Vector(.2,.3,.4),assignment,finals,
+        Vector(Vector(Start),Vector(Start),Vector(Start)),
+        Vector(trail),
+        Vector.fill(3)(AuditResult(Vector.empty,Vector.empty))
+      )
+      OutputGpxFiles.foreach(name=>assertT(report.contains(name),s"report missing $name"))
+      assertT(report.contains(OutputDebugFile))
+      assertT(report.contains("Planning-time convention:"))
+      assertT(report.contains("report only"))
+      assertT(report.contains(s"DAY-C3 $StartName -> $P2PFinishName"))
+    }
+
+    // 22. Independent final reconstructed GPX gap contract.
+    ts.test("final GPX gap thresholds are WARN at 100m and FAIL at 250m") {
+      assertT(finalGapLevel(99.999)==0)
+      assertT(finalGapLevel(100.0)==1)
+      assertT(finalGapLevel(249.999)==1)
+      assertT(finalGapLevel(250.0)==2)
+      assertT(FinalGapWarnM==100.0 && FinalGapFailM==250.0)
+    }
+
+    ts
   def debugPathFromArgs(args:Array[String]):Path =
     val idx=args.indexOf("--output")
-    if idx>=0 && idx+1<args.length then Paths.get(args(idx+1)).resolve("day.debug.txt")
+    if idx>=0 && idx+1<args.length then Paths.get(args(idx+1)).resolve(OutputDebugFile)
     else Paths.get("day.debug.txt")
 
   def writeAlwaysDebug(path:Path,body:String,append:Boolean=false):Unit =
