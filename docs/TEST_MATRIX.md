@@ -21,7 +21,7 @@ Until tests receive stable IDs in source, this matrix identifies them by their e
 
 ## Coverage levels
 
-- **DIRECT** — the current test explicitly asserts the contract/property itself; the default-running regression suite would fail if that property regressed.
+- **DIRECT** — the named default-running regressions, collectively, explicitly assert every material normative clause of the referenced contract/property that the row claims to cover; the default-running regression suite would fail if that property regressed. A fixture merely containing a value is not an assertion; if only a subset of clauses is protected, the class is **PARTIAL**. Wording such as "represented in the fixture" or "boundary X is asserted" for one clause cannot justify `DIRECT` over a larger contract whose remaining clauses are unasserted.
 - **PARTIAL** — the test asserts an important part, but one or more normative clauses remain unprotected.
 - **INDIRECT** — the property is exercised only as a side effect of a broader test.
 - **MISSING** — no deterministic regression in the current default-running suite directly protects the property.
@@ -39,23 +39,23 @@ A production check in code is **not** counted as regression coverage unless a te
 | `PC-MAND-02` | DIRECT | same two tests | Exact-once set/order semantics are asserted in both search and reconstruction fixtures. |
 | `PC-MAND-03` | DIRECT | `reconstruction preserves every mandatory exactly once in supplied direction` | Forward occurrence is required and reversed mandatory occurrence is rejected. |
 | `PC-MAND-04` | DIRECT | `reconstruction preserves every mandatory exactly once in supplied direction` | Canonical mandatory points/elevations win at stitches and occur exactly once. |
-| `PC-DEMAND-01` | DIRECT | `demanding whole-trail classification uses ridden length`; `demanding local 60m and 100m windows are independent` | Whole-trail denominator and independent 60 m / 100 m semantics are asserted. |
+| `PC-DEMAND-01` | PARTIAL | `demanding whole-trail classification uses ridden length`; `demanding local 60m and 100m windows are independent` | Whole-trail ridden-length denominator and structural 60 m/100 m independence are asserted directly. Threshold boundaries of all three classification rules (and the sinuosity conditions) are exercised only from the positive side; a relaxation of the decision rule would keep the current fixtures green. |
 | `PC-DEMAND-02` | MISSING | — | Current suite has no direct first-demanding-trail assertion. |
 | `PC-PROT-01` | PARTIAL | `protected corridor continuous tube geometry invariants`; `corridor safety sampling canonicalizes raw segmentation` | Geometry semantics are protected, but the suite does not drive connector generation proving that both mandatory and avoid GPXs are enforced as protected corridors. |
 | `PC-PROT-02` | DIRECT | `protected corridor continuous tube geometry invariants` | Perpendicular and oblique crossings are distinguished from genuine co-travel. |
 | `PC-PROT-03` | PARTIAL | `protected corridor continuous tube geometry invariants`; `corridor safety sampling canonicalizes raw segmentation` | Continuous measurement and segmentation invariance are direct; the hard/warning threshold classification is not directly asserted. |
 | `PC-SAFE-01` | MISSING | — | No current test systematically injects missing/invalid/non-finite safety evidence and asserts fail-closed behavior. |
-| `PC-WALL-01` | DIRECT | `hard wall thresholds are 27pct/30m, 20pct/100m and 180W/90s` | 27% boundary and immediately-below case are asserted. |
-| `PC-WALL-02` | DIRECT | same test | 20% boundary and immediately-below case are asserted. |
-| `PC-WALL-03` | DIRECT | same test | 90 s boundary and immediately-below case are asserted. |
+| `PC-WALL-01` | PARTIAL | `hard wall thresholds are 27pct/30m, 20pct/100m and 180W/90s` | The 27% threshold predicate is asserted at and immediately below the boundary, but only on hand-constructed `WallMetrics`; no default-running test derives the exact 30 m maximum uphill grade from connector geometry. |
+| `PC-WALL-02` | PARTIAL | same test | The 20% threshold predicate is asserted at and immediately below the boundary; the exact 100 m maximum grade derivation from geometry is not driven by any test. |
+| `PC-WALL-03` | PARTIAL | same test | The 90 s boundary predicate is asserted on hand-constructed streak duration; no default-running test derives a positive above-threshold sustained-power streak from rider physics (only the spike-smoothing negative case in the physics test touches streak derivation). |
 | `PC-ROAD-01` | PARTIAL | `road policy separates hard invalid roads from scored primary exposure` | Motorway and trunk are directly asserted; steps/ferry/rail/rail-ferry/impassable are not individually covered. |
 | `PC-ROAD-02` | PARTIAL | same test | Finite unprotected-primary exposure is directly shown to remain scored; unmodelable primary exposure fail-closed behavior is not directly asserted. |
 | `PC-EVID-01` | MISSING | — | Direction is tested separately, but no current regression proves that qualified real-ride evidence raises effective wall and can hard-reject a connector. |
 | `PC-EVID-02` | DIRECT | `real-ride wall evidence is directional` | Forward local evidence matches; reversed reference is rejected. |
-| `PC-RIDER-01` | DIRECT | `audit rider recomputation preserves technical mandatory policy` | Fixture distinguishes technical mandatory downhill physics from ordinary transfer physics and checks audit recomputation uses the technical policy. |
-| `PC-SEARCH-01` | DIRECT | `RAW DP visits every mandatory exactly once` | The synthetic graph has a known complete optimum and RAW DP must recover the complete exact order. |
+| `PC-RIDER-01` | PARTIAL | `audit rider recomputation preserves technical mandatory policy` | Cap application, its binding effect on the fixture, and distinctness from ordinary transfer downhill physics are asserted. The established cap value itself is referenced through the constant, never asserted; value drift that keeps the cap binding would not fail the suite. |
+| `PC-SEARCH-01` | PARTIAL | `RAW DP visits every mandatory exactly once` | The named fixture recovers a complete exact-once order from a known optimum. The graph carries only one connector per transition, so the prohibition on beam/top-K/quantized dominance or detour cutoffs is not challenged under label pressure. |
 | `PC-SEARCH-02` | PARTIAL | `exact no-horizon rider search + local marginal-drop selector` | No-fixed-horizon behavior is directly protected. The broader admissibility of every baseline-pruning condition is not independently regression-tested. |
-| `PC-CLASS-01` | DIRECT | `wall breakpoint sweep preserves useful wall/order changes` | Both >=180 s transfer improvement and order-change usefulness are represented in the fixture. |
+| `PC-CLASS-01` | PARTIAL | `wall breakpoint sweep preserves useful wall/order changes` | The fixture contains a 200 s improvement step and an order-change step, but the 180 s threshold is not pinned at its boundary and the two usefulness clauses can mask each other (a lowered threshold keeps the fixture green while the order-change clause becomes dead). Only LOOP mode is exercised. |
 | `PC-CLASS-02` | MISSING | — | Current suite does not directly exercise C1/C2/C3 derivation from the union of useful severities or the fail-if-<3 rule. |
 | `PC-ENDPOINT-01` | PARTIAL | `endpoint assignment chooses exactly one P2P class` | Two LOOP / one P2P and a selected P2P placement are asserted; total-road and deterministic tie-break semantics are not exhaustively covered. |
 | `PC-QUALITY-01` | PARTIAL | `rider product selector preserves guardrails while improving candHard` | Strict `candHard` improvement plus road/spike/max-ascent guardrails are covered. Low/high streak, upward, roughness, warm-up, demanding adjacency, and genuine C2/C3 wall-use clauses are not all directly asserted. |
@@ -64,7 +64,7 @@ A production check in code is **not** counted as regression coverage unless a te
 | `PC-AUDIT-01` | MISSING | — | Audit recomputation pieces are tested, but no regression drives a hard final-audit failure through production and proves successful output is prevented. |
 | `PC-ENDPOINT-02` | MISSING | — | The current suite does not directly assert the 5 m start/finish continuity limits. |
 | `PC-GAP-01` | DIRECT | `final GPX gap thresholds are WARN at 100m and FAIL at 250m` | All boundary classes around 100 m and 250 m are asserted. |
-| `PC-CLI-01` | DIRECT | `CLI tests run by default; --no-test skips; --self-test is removed` | Default tests-on behavior and explicit `--no-test` opt-out are asserted. |
+| `PC-CLI-01` | PARTIAL | `CLI tests run by default; --no-test skips; --self-test is removed` | Parsing-level default-on and explicit `--no-test` opt-out are asserted. The execution wiring itself (suite actually runs before production routing, and a failing suite prevents production) is not exercised by any default-running regression. |
 | `PC-OUT-01` | PARTIAL | `human report and exact five output filenames remain stable` | Exact planner-owned filename set is asserted; a real successful production run creating all five files is not exercised by the synthetic test. |
 | `PC-OUT-02` | PARTIAL | same test | C3 P2P human-report endpoint meaning is asserted; the complete LOOP/P2P start/finish semantics for all three outputs are not directly covered. |
 | `PC-REPORT-01` | PARTIAL | same test | The report explicitly exposes the planning-time convention as report-only; the exact 3 min + 3 min arithmetic and non-interference with optimization/GPX are not independently asserted. |
@@ -83,7 +83,7 @@ The architecture document owns the full statements below. This table records onl
 | **Connector graph** — semantic dedupe is bit-exact, not rounded | DIRECT | `semantic connector duplicate is bit exact` | Nearby-but-different elevation remains semantically distinct. |
 | **Transfer rider physics** — ~30 m grade chunks and downhill coasting | DIRECT | `transfer physics uses 30m grade chunks and downhill coasting` | Both chunk smoothing behavior and downhill coasting are asserted. |
 | **Transfer rider physics** — streaks concatenate across component boundaries | DIRECT | `streak concatenation crosses component boundaries` | Boundary-crossing streak duration is directly asserted. |
-| **RAW search** — exact complete mandatory order on the received graph | DIRECT | `RAW DP visits every mandatory exactly once` | Known synthetic optimum is recovered. |
+| **RAW search** — exact complete mandatory order on the received graph | PARTIAL | `RAW DP visits every mandatory exactly once` | Known synthetic optimum is recovered. The single-connector fixture cannot distinguish exact DP from any heuristic that happens to find the same order; see `PC-SEARCH-01`. |
 | **Rider-quality search** — continuation state includes climb history | PARTIAL | `incremental climb-shape update`; `exact no-horizon rider search + local marginal-drop selector` | Incremental climb semantics and no-horizon search are tested, but exact state-group separation by continuation history is not directly challenged. |
 | **Post-search selection** — local selector is a product-selection stage, not search pruning | PARTIAL | `exact no-horizon rider search + local marginal-drop selector` | Selector behavior and distant no-horizon candidate survival are protected; stage-separation itself is not directly asserted. |
 | **Reconstruction** — canonical mandatory geometry/elevation wins at stitch boundaries | DIRECT | `reconstruction preserves every mandatory exactly once in supplied direction` | Connector boundary elevations are deliberately different from canonical mandatory elevations. |
@@ -129,6 +129,12 @@ These are high-risk because `ARCHITECTURE.md` identifies representation mixing a
 
 ## Important partial coverage
 
+- `PC-DEMAND-01` — classification threshold boundaries exercised only from the positive side.
+- `PC-WALL-01` / `PC-WALL-02` / `PC-WALL-03` — exact 30 m / 100 m grade derivation from connector geometry, and positive sustained-power streak derivation, behind the pinned threshold predicates.
+- `PC-CLASS-01` — 180 s improvement threshold not pinned at its boundary; clause masking; LOOP mode only.
+- `PC-SEARCH-01` — exactness under competing connector variants / label pressure (also the matching architecture row).
+- `PC-RIDER-01` — exact technical descent cap value.
+- `PC-CLI-01` — suite-before-production execution wiring and failure gate.
 - `PC-PROT-01` / `PC-PROT-03` — full connector-generation enforcement and the hard/warning threshold classification.
 - `PC-ROAD-01` / `PC-ROAD-02` — all forbidden classes and unmodelable-primary fail-closed behavior.
 - `PC-SEARCH-02` — admissibility of every baseline-pruning guard.
