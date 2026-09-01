@@ -24,6 +24,7 @@ Current repository contracts override historical comments and old experiments.
 * Do not make a route succeed by weakening an established product or safety contract.
 * Performance work must preserve the problem being solved.
 * Prefer removing a disproven heuristic over compensating for it with another heuristic.
+* When an investigation establishes new durable product/architecture knowledge or rejects an established direction, use `.agents/skills/invariant-promotion/SKILL.md` before traceability synchronization.
 * When executable test evidence, `docs/TEST_MATRIX.md` traceability, product contracts, or tested architecture invariants materially change, use `.agents/skills/test-traceability-sync/SKILL.md` to synchronize traceability in the same change.
 
 For a bug:
