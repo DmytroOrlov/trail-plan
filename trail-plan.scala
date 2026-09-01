@@ -1,8492 +1,3684 @@
 #!/usr/bin/env -S instant-scala
 //> using scala "3.3.7"
 //> using dep "com.lihaoyi::ujson:4.4.3"
-//> using dep "com.github.alexarchambault::case-app:2.1.0"
+//> using jvm "21"
 //> using packaging.graalvmArgs --no-fallback
-// PRODUCT BUILD MTB-CANONICAL-REFERENCE2
-// Every supplied technical GPX is independently mandatory exactly once in its
-// supplied direction. Canonical mandatory GPX <ele> is used directly.
-// Transfers come from Valhalla; explicit trails/avoid may not be transfer
-// corridors. Road safety, absolute wall safety and production real-ride wall
-// evidence remain hard.
-//
-// PRODUCT CONTRACT
-// ================
-// - 12 production Valhalla search profiles.
-// - Terrain frontier is exact fastest-transfer at every real wall breakpoint.
-// - C1/C2/C3 wall usefulness derives from RAW terrain: first reachable level,
-//   then >=3 min raw transfer improvement or a natural raw mandatory-order change.
-// - At least one non-demanding warm-up before the first demanding descent is hard.
-// - Second warm-up and avoiding demanding->demanding adjacency are soft preferences.
-// - Product set contains exactly two LOOP days and one P2P day; wall classes come
-//   from the union of RAW-useful terrain breakpoints, while endpoint role is selected
-//   independently from all reachable class/endpoint pairings by total RAW transfer.
-// - Rider GPX uses the minimum-transfer exact active-wall route that strictly
-//   improves candidate 120/140/160 comfort over the migration reference without
-//   worsening the guarded rider metrics.
-// - No percentage detour budget, family semantics, forced order diversity, beam,
-//   top-K route cutoff, DP objective quantization, or random pruning.
-//
-// EXACTNESS CONTRACT
-// ==================
-// - Terrain DP is exact on the corrected connector graph it receives.
-// - Migration-reference DP is exact inside its legacy +60 envelope.
-// - V5 promotion DP is exact inside PromotionSearchSlackCeilingSeconds and uses
-//   constrained resource-aware dominance; budget pruning uses an admissible
-//   completion lower bound.
-// - Mandatory technical GPXs remain exactly once and in supplied direction.
-//
-// CLEANUP LEDGER
-// ==============
-// CLEAN7 CANDIDATE-POWER-ONLY:
-// - removes the legacy fixed-power comfort system from production/search semantics:
-//   weighted fetch effort at 90/150/200/250 W, suffering at 150/200/250 W,
-//   legacy 150/180 W streak comfort and legacy 150/50 W spike load;
-// - connector generation/semantic dedupe/Pareto dominance now use only V5 candidate
-//   comfort (rider-relative 1.50/1.75/2.00x, streak 1.50/1.75x, spike 1.50/0.50x)
-//   plus the separate hard 180 W / 90 s safety wall signal;
-// - removes old power fields from RideTimeEstimate, Connector, HumanQualityRoute and
-//   MultiLabelRoute; reports say candHard instead of legacy hard/suffer;
-// - migration +60 remains temporarily, but its comparator/resources now use V5
-//   candidate comfort only; it no longer depends on 150/200/250 legacy power metrics;
-// - this intentionally changes connector-search ordering/dominance and may change the
-//   connector graph. Re-run full class/endpoint/V5/audit regression before promotion.
-// CLEAN6-FIX1 REPORT-SYNTAX FIX:
-// - removes one dangling string-concatenation '+' left after evaluator deletion;
-// - no routing/product behavior changes; report text is otherwise unchanged;
-// - production C1/C2/C3, RAW endpoint assignment, migration baselines, safety and Audit.run unchanged.
-// CLEAN6:
-// - physically removes the manual-order evaluator CLI, output file, fixed-order
-//   analysis, bottlenecks, swaps, relocations, transition deltas and greedy search;
-// - removes the completed CLEAN5 RAW-baseline replacement audit and its extra exact
-//   promotion-frontier computation; Archive 44 showed RAW-fastest is not a sufficient
-//   standalone replacement for the current V5 migration baseline;
-// - production C1/C2/C3 selection, endpoint-neutral RAW assignment, migration references,
-//   safety, final GPX reconstruction and Audit.run semantics are unchanged.
-//
-// KEEP / PRODUCT:
-// - RAW terrain wall breakpoints and RAW-useful global class derivation.
-// - Endpoint-neutral assignment over every reachable 2xLOOP + 1xP2P pairing.
-// - Candidate comfort cumulative 120/140/160 plus guarded road/climb/streak/spike.
-// - Three legacy +60 migration references ONLY as current V5 no-regression baselines.
-//
-// REMOVE / PROMOTE NEXT:
-// - Replace the remaining 3 migration references with an independently validated
-//   standalone final preference policy; then delete the last legacy +60 solver.
-// - Revalidate/replace PromotionSearchSlackCeilingSeconds if product completeness
-//   must extend beyond the currently validated canonical dataset.
-// - Revalidate the 12-profile connector cover when canonical data/semantics change.
-//
-// ALREADY REMOVED:
-// - Entire manual-order evaluator CLI/output/runtime.
-// - Completed RAW-baseline replacement probe after Archive 44.
-// - Endpoint-specific +60 USEFUL/NOISE classification and its replacement audits.
-// - Broad comfort/LOW/STOP/RAW-GUARD views, knee/percentage/set diagnostics.
-// - Connector-promotion audit runtime after 0/0 semantic/dominance losses.
-// - Shadow GPX/report generation after 3/3 acceptance PASS.
-// - Legacy +60 influence on wall classes, endpoint assignment and rider GPX choice.
 
-import java.io.FileInputStream
+// ============================================================================
+// TEMPORARY / TEST-ONLY CLEANUP LEDGER — DELETE OR EXTRACT BEFORE FINAL FREEZE
+// ============================================================================
+// Rule: every new evidence-only, differential, temporary diagnostic, synthetic
+// test fixture, or transitional compatibility path MUST be added here when it is
+// introduced. Production semantics must not depend on anything in this list.
+//
+// [TEST-ONLY] In-file self-test harness and synthetic fixtures (`runSelfTests`,
+//        selftest-no-horizon, geometry/road/DP fixtures).
+//        Current product contract requires tests to run by default, so DO NOT
+//        delete them yet. If/when they move to a separate test artifact, remove
+//        the embedded harness and fixtures from the production source in the same
+//        change; retain only `--no-test` behaviour if still required.
+//
+// Already removed temporary evidence:
+// - FIX31 `road-primary-evidence` per-connector logging.
+// - FIX34 historical OLD corridor matcher and all OLD-vs-corrected matcher/
+//   blocker differential counters/logging.
+// - FIX34 targeted `corridor-safety-sampling` log for
+//   Bunker -> RegenbogenAbzweiger.
+// - FIX34 `trace-corridor-diagnostic` comparison logging.
+// - FIX34 successful-route `reroute-chain` logging. Failure/cap diagnostics remain.
+// - FIX34 RAW 3x2 class/endpoint `evidence-matrix` type/computation/output.
+// - FIX35 `GRAPH TRANSITION x CLASS INVENTORY` per-transition/class dump.
+// - FIX35 full RAW breakpoint signatures; retained compact breakpoint metrics.
+// - FIX35 per-layer and terminal-progress rider-DP telemetry; retained final
+//   rider-DP timing/counter summaries.
+// - FIX36 verbose `rider-policy-evidence` orders/fractions; retained one compact
+//   FAST/KNEE/COMFORT Pareto summary per product class.
+// - FIX36 RAW frontier bottleneck/connector-physics detail; retained compact
+//   wall/transfer/road/order diagnostics for exact RAW breakpoints.
+// - FIX38 temporary 25-profile cover audit, per-profile cost/yield accounting,
+//   exact set-cover diagnostics and audit-only profile generation. The audit
+//   proved under current connector/safety/road semantics that the production
+//   12 profiles cover all 249 useful solver-semantic groups found by the
+//   historical calibrated 25-profile superset; exact set-cover size is still
+//   12, with 0 jointly removable production profiles and 0 missing useful
+//   groups requiring audit-profile additions.
+// - FIX40 temporary global-25 exact-cover / zero-transition audit. It proved
+//   the global exact minimum remains 12 profiles. It also found the same 19
+//   logical transitions finish with no accepted connector for all 25 calibrated
+//   profiles, but FIX41 subsequently proved these are NOT base Valhalla
+//   reachability holes.
+// - FIX41 temporary one-profile base-route topology scout. Result: all 120
+//   logical transitions have a base Valhalla route on the validated fingerprint
+//   (scoutNoRoute=0); the 19 empty graph transitions only become no-route after
+//   protected-corridor blocker/safety rerouting. Therefore no production
+//   profile attempts can be skipped from a cheap base-route scout. The scout
+//   saved 0 attempts and slightly increased graph time (~36.31s -> ~36.49s);
+//   all scout code/counters/fingerprint gating were removed.
+// - FIX43 temporary blocker-dead evidence. Result on production12:
+//   19 empty transitions x 12 profiles = 228 blocker-dead connector attempts,
+//   consuming 1546 /route requests and ~8.674s measured connector time.
+//   Most die after 6 blocker reroutes (a few after 4-5), but blocker sequences
+//   are not profile-invariant: several transitions have 4-7 distinct sequences
+//   and Reiherberg->LittleWhistler / LittleWhistlerB each have 10.
+//   Therefore cross-profile "first dead profile => skip the rest" is NOT a
+//   justified production rule. Likewise batching additional avoid_locations
+//   would change point-blocker search semantics and can suppress legitimate
+//   alternatives, so no such shortcut was promoted. All FIX43 evidence code was
+//   removed after this result was recorded.
+// ============================================================================
+
+import java.io.*
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
-import java.time.Instant
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, Paths, StandardCopyOption, StandardOpenOption}
+import java.text.Normalizer
+import java.time.{Duration, Instant}
+import java.util.Locale
 import javax.xml.parsers.DocumentBuilderFactory
-import javax.xml.stream.XMLOutputFactory
-import org.w3c.dom.{Element, Node}
-
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
-import scala.util.Try
-import caseapp.*
+import scala.util.control.NonFatal
+import scala.util.{Try, Success, Failure}
+import ujson.*
 
-object BuildInfo:
-  val id = "MTB-CANONICAL-REFERENCE2-FIX27-CONTRACT-TESTS"
+object MtbRoutePlanner:
+  val BuildId = "PRODUCT-V6-GREENFIELD1-FIX44-BLOCKER-DEAD-EVIDENCE-CLOSED"
+  val EarthR = 6371008.8
+  val AvoidToleranceM = 12.0
+  val Start = Point(53.472143, 9.876907, 0.0)
+  val LoopFinish = Point(53.472143, 9.876907, 0.0)
+  val P2PFinish = Point(53.465204, 9.962392, 0.0)
+  val StartName = "S-Neuwiedenthal"
+  val P2PFinishName = "S-Heimfeld"
 
-object PowerPolicy:
-  // HARD SAFETY ONLY. This is not a rider-comfort preference.
-  val SafetyWallPowerW: Int = 180
-  val SafetyWallMinStreakSeconds: Double = 90.0
+  val RiderMass = 65.0
+  val BikeMass = 20.0
+  val TotalMass = RiderMass + BikeMass
+  val WheelInch = 27.5
+  val FrontTeeth = 32.0
+  val RearTeeth = 51.0
+  val PreferredCadence = 80.0
+  val MinimumCadence = 45.0
+  val DrivetrainEfficiency = 0.95
+  val TargetPower = 80.0
+  val G = 9.80665
+  val Rho = 1.225
+  val CdA = 0.60
+  val PhysicsGradeWindowM = 30.0
+  val TrailDownhillMaxKph = 6.0
+  // Rider-quality search has no fixed time horizon. Exact pruning is limited to
+  // resources that are monotone and already make RAW-baseline upgrade eligibility
+  // impossible; transfer is never capped by a fixed detour budget.
+  //
+  // FIX30 product policy is applied only AFTER exact search.  Among all guard-safe
+  // strict candHard upgrades we build the exact 2-D Pareto frontier
+  // (transfer, candHard).  Production selects its parameter-free knee: after
+  // normalizing the two frontier axes between the transfer-first and comfort-first
+  // extremes, maximize (fraction of available candHard improvement obtained) minus
+  // (fraction of available extra transfer spent).  This favors large early comfort
+  // gains while rejecting the extreme detours exposed by FIX29.  Linear/no-knee
+  // frontiers tie toward the faster route.  No +60/+600 window, migration route,
+  // fixed time horizon, weighted score, percentage detour budget, beam, top-K or
+  // epsilon search approximation is introduced.
+  //
+  // ROAD POLICY (validated by FIX31/FIX32 A/B): finite unprotected-primary
+  // exposure is measured road stress, not a duration-threshold hard deletion.
+  // Motorway/trunk/steps/ferry/rail/impassable remain hard; unmodelable primary
+  // duration remains fail-closed.
 
-  // PRODUCT RIDER-COMFORT POLICY.
-  val CandidateComfortMultipliers: Vector[Double] =
-    Vector(1.50, 1.75, 2.00)
+  // HUMAN REPORT ONLY.  Keep ride optimization independent from stop planning.
+  // This preserves the useful old day.txt convention explicitly: 3 minutes
+  // before and 3 minutes after each mandatory technical GPX.  With the current
+  // 10 mandatory trails this adds 60 minutes to modeled moving time.  It does
+  // not affect connector generation, DP, wall classes, rider metrics or GPX.
+  val HumanReportTrailPauseMin = 3.0
 
-  val CandidateStopStreakMultipliers: Vector[Double] =
-    Vector(1.50, 1.75)
+  case class Point(lat: Double, lon: Double, ele: Double)
+  case class XY(x: Double, y: Double)
+  case class Profile(speedKph: Double, useHills: Double, useRoads: Double):
+    def id: String = f"v${speedKph}%.0f-h${useHills}%.2f-r${useRoads}%.2f"
 
-  val CandidateSpikeBaseMultiplier: Double = 1.50
-  val CandidateSpikeScaleMultiplier: Double = 0.50
+  // Production Valhalla search cover.
+  // FIX38 revalidated this set against the historically calibrated 25-profile
+  // superset under the CURRENT connector/safety/road semantics:
+  //   useful solver-semantic groups: production12=249, historical25=249
+  //   missing useful groups outside production12: 0
+  //   exact set-cover over current12: size=12
+  //   jointly removable production profiles: 0
+  // Therefore every profile below remains necessary for preserving the current
+  // useful connector-class cover, while the 13 historical audit-only profiles
+  // add no new useful solver-semantic group.
+  val Profiles = Vector(
+    Profile(20.0, 0.25, 0.35), Profile(20.0, 0.50, 0.35), Profile(20.0, 0.90, 0.35),
+    Profile(15.0, 0.05, 0.35), Profile(15.0, 0.50, 0.75), Profile(15.0, 0.90, 0.35),
+    Profile(15.0, 0.90, 0.75), Profile(25.0, 0.05, 0.35), Profile(25.0, 0.90, 0.35),
+    Profile(15.0, 0.70, 0.55), Profile(25.0, 0.16, 0.75), Profile(20.0, 0.98, 0.55)
+  )
 
-  def roundedThresholdW(targetW: Double, multiplier: Double): Int =
-    math.max(1, math.round(targetW * multiplier).toInt)
+  case class DemandingMeasurements(
+      wholeGradePct: Double,
+      wholeSinuosity: Double,
+      local60MaxGradePct: Double,
+      local60MaxSinuosity: Double,
+      local60Pass: Boolean,
+      local100MaxGradePct: Double,
+      local100MaxSinuosity: Double,
+      local100Pass: Boolean
+  ):
+    def demanding: Boolean =
+      (wholeGradePct >= 10.0 && wholeSinuosity >= 1.10) || local60Pass || local100Pass
 
-  def candidateComfortThresholdsW(targetW: Double): Vector[Int] =
-    CandidateComfortMultipliers
-      .map(multiplier => roundedThresholdW(targetW, multiplier))
-      .distinct
-      .sorted
+  case class Trail(name: String, points: Vector[Point], demanding: DemandingMeasurements, rider: RiderMetrics)
+  case class Gpx(name: String, points: Vector[Point])
+  case class GeoBounds(minLat: Double, maxLat: Double, minLon: Double, maxLon: Double)
 
-  def candidateStopStreakThresholdsW(targetW: Double): Vector[Int] =
-    CandidateStopStreakMultipliers
-      .map(multiplier => roundedThresholdW(targetW, multiplier))
-      .distinct
-      .sorted
+  case class ProtectedCorridor(name: String, points: Vector[Point], kind: String):
+    def label: String = s"$kind:$name"
+    lazy val bounds: GeoBounds = geoBounds(points)
 
-  def candidateSpikeBaseW(targetW: Double): Double =
-    targetW * CandidateSpikeBaseMultiplier
+  case class EdgeAttr(
+      id: String,
+      begin: Int,
+      end: Int,
+      lengthM: Double,
+      speedKph: Double,
+      roadClass: String,
+      use: String,
+      surface: String,
+      cycleLane: String,
+      unpaved: Boolean,
+      ridingSeconds: Double
+  ):
+    def seconds: Double =
+      if speedKph > 0 then lengthM / (speedKph / 3.6)
+      else if ridingSeconds.isFinite && ridingSeconds >= 0 then ridingSeconds
+      else Double.PositiveInfinity
 
-  def candidateSpikeScaleW(targetW: Double): Double =
-    targetW * CandidateSpikeScaleMultiplier
+  case class Streak(prefix: Double, suffix: Double, localMax: Double, allAbove: Boolean, duration: Double):
+    def concat(b: Streak): Streak =
+      val d = duration + b.duration
+      val all = allAbove && b.allAbove
+      val pre = if allAbove then duration + b.prefix else prefix
+      val suf = if b.allAbove then b.duration + suffix else b.suffix
+      val cross = suffix + b.prefix
+      Streak(pre, suf, math.max(math.max(localMax, b.localMax), cross), all, d)
 
-  def trackedThresholdsW(targetW: Double): Vector[Int] =
-    (
-      candidateComfortThresholdsW(targetW) ++
-        candidateStopStreakThresholdsW(targetW) ++
-        Vector(SafetyWallPowerW)
-    ).distinct.sorted
+  object Streak:
+    val Empty = Streak(0.0, 0.0, 0.0, true, 0.0)
+    def constant(seconds: Double, above: Boolean): Streak =
+      if seconds <= 0 then Empty
+      else if above then Streak(seconds, seconds, seconds, true, seconds)
+      else Streak(0.0, 0.0, 0.0, false, seconds)
 
-
-case class Point(lat: Double, lon: Double, ele: Option[Double] = None)
-
-case class Trail(path: Path, name: String, points: Vector[Point]):
-  def start: Point = points.head
-  def end: Point = points.last
-
-case class RouteResult(
-    from: Point,
-    to: Point,
-    // Resampled/elevated profile used for rider physics and wall metrics.
-    points: Vector[Point],
-    // Exact decoded /route shape before resampling. Hard road/downhill
-    // trace_attributes edge_walk MUST use this geometry.
-    rawValhallaPoints: Vector[Point],
-    seconds: Double,
-    lengthKm: Double
-)
-
-case class SearchProfileKey(speedKph: Double, useHills: Double, useRoads: Double):
-  def short: String =
-    f"speed=$speedKph%.0f hills=$useHills%.2f roads=$useRoads%.2f"
-
-case class Connector(
-    route: RouteResult,
-    ascentM: Double,
-    descentM: Double,
-    lateAscentM: Double,
-    physicsSeconds: Double,
-    fatiguePenaltySeconds: Double,
-    transferQualityPenaltySeconds: Double,
-    candidateComfortPenaltySeconds: Double,
-    maxRiderPowerW: Double,
-    maxGrade30Pct: Double,
-    maxGrade100Pct: Double,
-    majorRoadSeconds: Double,
-    motorwayTrunkSeconds: Double,
-    hasMotorwayTrunk: Boolean,
-    primaryNoCycleSeconds: Double,
-    primarySharedSeconds: Double,
-    primaryWithCycleSeconds: Double,
-    secondaryNoCycleSeconds: Double,
-    secondarySharedSeconds: Double,
-    longestLowProtectionPrimarySeconds: Double,
-    unpavedSeconds: Double,
-    downhillHandlingSeconds: Double,
-    longestTechnicalDownhillRunM: Double,
-    maxTechnicalDownhillGrade30Pct: Double,
-    maxTechnicalDownhillGrade100Pct: Double,
-    maxTechnicalPathDownhillGrade30Pct: Double,
-    effectiveCrr: Double,
-    pathFraction: Double,
-    routingSpeedKph: Double,
-    routingUseHills: Double,
-    routingUseRoads: Double,
-    traceEdges: Vector[TraceEdge],
-    powerAboveSecondsByThreshold: Map[Int, Double] = Map.empty,
-    longestPowerStreakSecondsByThreshold: Map[Int, Double] = Map.empty,
-    candidateComfortSpikeLoadSeconds: Double = 0.0,
-    searchConnectorVariants: Vector[Connector] = Vector.empty
-)
-
-case class ProfileStats(
-    lengthM: Double,
-    ascentM: Double,
-    descentM: Double,
-    netElevationM: Option[Double],
-    longestClimbDistanceM: Double,
-    longestClimbAvgGradePct: Double,
-    maxGrade30Pct: Double,
-    maxGrade100Pct: Double,
-    maxPointGapM: Double
-)
-
-case class TraceEdge(
-    lengthKm: Double,
-    surface: String,
-    use: String,
-    roadClass: String,
-    unpaved: Boolean,
-    cycleLane: String,
-    beginShapeIndex: Option[Int] = None,
-    endShapeIndex: Option[Int] = None
-)
-
-case class TraceAttributesDetailed(edges: Vector[TraceEdge], shape: Vector[Point])
-
-case class AuditResult(warnings: Vector[String], failures: Vector[String]):
-  def verdict: String =
-    if failures.nonEmpty then "FAIL"
-    else if warnings.nonEmpty then "WARN"
-    else "PASS"
-
-case class RoutingProfile(
-    speedKph: Double = 20.0,
-    useHills: Double = 0.70,
-    useRoads: Double = 0.35,
-    bicycleType: String = "Mountain",
-    avoidBadSurfaces: Double = 0.50
-)
-
-case class Config(
-    // The two coordinates are candidate ride endpoints. The planner may start
-    // at either and may finish at either: 1->1, 1->2, 2->1, 2->2.
-    start: Point = Point(53.465204, 9.962392),
-    startName: String = "S-Heimfeld",
-    finish: Point = Point(53.472143, 9.876907),
-    finishName: String = "S-Neuwiedenthal",
-    inputs: Vector[Path] = Vector.empty,
-    out: Path = Path.of("day.gpx"),
-    report: Option[Path] = None,
-    valhalla: String = "http://localhost:8002",
-    profile: RoutingProfile = RoutingProfile(),
-    arrivalClimbPenaltyMinPer100m: Double = 2.00,
-    arrivalWindowM: Double = 500.0,
-    physicsSampleM: Double = 10.0,
-    riderWeightKg: Double = 65.0,
-    bikeWeightKg: Double = 20.0,
-    riderPowerW: Double = 80.0,
-    downhillMaxKph: Double = 6.0,
-    trailPauseMin: Double = 3.0,
-    runTests: Boolean = true
-)
-
-case class CliOptions(
-    start: String = "53.465204,9.962392,S-Heimfeld",
-    finish: String = "53.472143,9.876907,S-Neuwiedenthal",
-    out: String = "day.gpx",
-    report: Option[String] = None,
-    valhalla: String = "http://localhost:8002",
-    bike: String = "Mountain",
-    avoidBadSurfaces: Double = 0.50,
-    arrivalClimbPenalty: Double = 2.0,
-    riderWeight: Double = 65.0,
-    bikeWeight: Double = 20.0,
-    power: Double = 80.0,
-    trailMaxSpeed: Double = 6.0,
-    trailPauseMin: Double = 3.0,
-    noTest: Boolean = false
-)
-
-object Cli:
-  private val ValidBikes = Set("road", "hybrid", "city", "cross", "mountain")
-
-  def parse(args: Seq[String]): Either[String, Option[Config]] =
-    CaseApp.parseWithHelp[CliOptions](args) match
-      case Left(error) =>
-        Left(error.message)
-
-      case Right((parsed, helpAsked, usageAsked, remaining)) =>
-        if helpAsked || usageAsked then
-          val messages = caseapp.core.help.Help[CliOptions].withHelp
-          println(if helpAsked then messages.help else messages.usage)
-          Right(None)
-        else
-          parsed.left.map(_.message).flatMap(options => toConfig(options, remaining).map(Some(_)))
-
-  private def toConfig(options: CliOptions, remaining: Seq[String]): Either[String, Config] =
-    for
-      start <- endpoint(options.start, "Endpoint 1")
-      finish <- endpoint(options.finish, "Endpoint 2")
-      _ <- validate(options)
-      out <- path(options.out, "--out")
-      report <- options.report match
-        case Some(raw) => path(raw, "--report").map(Some(_))
-        case None      => Right(None)
-      explicitInputs <- inputPaths(remaining)
-      inputs =
-        if explicitInputs.nonEmpty then explicitInputs
-        else Inputs.defaultTrailInputs()
-      _ <- Either.cond(
-        inputs.nonEmpty,
-        (),
-        "No input trails found. Default is trails/*.gpx; add GPX files there or pass GPX files/directories explicitly."
-      )
-    yield Config(
-      start = start._1,
-      startName = start._2,
-      finish = finish._1,
-      finishName = finish._2,
-      inputs = inputs,
-      out = out,
-      report = report,
-      valhalla = options.valhalla.stripSuffix("/"),
-      profile = RoutingProfile(bicycleType = options.bike, avoidBadSurfaces = options.avoidBadSurfaces),
-      arrivalClimbPenaltyMinPer100m = options.arrivalClimbPenalty,
-      riderWeightKg = options.riderWeight,
-      bikeWeightKg = options.bikeWeight,
-      riderPowerW = options.power,
-      downhillMaxKph = options.trailMaxSpeed,
-      trailPauseMin = options.trailPauseMin,
-      runTests = !options.noTest
+  case class RiderMetrics(
+      duration: Double,
+      t120: Double,
+      t140: Double,
+      t160: Double,
+      streak120: Streak,
+      streak140: Streak,
+      streak180: Streak,
+      spike: Double
+  ):
+    def candHard: Double = t120 + t140 + t160
+    def concat(b: RiderMetrics): RiderMetrics = RiderMetrics(
+      duration + b.duration,
+      t120 + b.t120,
+      t140 + b.t140,
+      t160 + b.t160,
+      streak120.concat(b.streak120),
+      streak140.concat(b.streak140),
+      streak180.concat(b.streak180),
+      spike + b.spike
     )
 
-  private def endpoint(raw: String, defaultName: String): Either[String, (Point, String)] =
-    raw.split(",", 3).map(_.trim) match
-      case Array(latRaw, lonRaw) =>
-        point(latRaw, lonRaw).map(_ -> defaultName)
+  object RiderMetrics:
+    val Empty = RiderMetrics(0,0,0,0,Streak.Empty,Streak.Empty,Streak.Empty,0)
 
-      case Array(latRaw, lonRaw, name) =>
-        point(latRaw, lonRaw).map(_ -> Option(name).filter(_.nonEmpty).getOrElse(defaultName))
+  case class WallMetrics(max30Pct: Double, max100Pct: Double, above180Seconds: Double):
+    def physicalSeverity: Double =
+      def safe(v: Double): Double = if v.isFinite && v > 0 then v else 0.0
+      math.max(math.max(safe(max30Pct) / 27.0, safe(max100Pct) / 20.0), safe(above180Seconds) / 90.0)
+    def hardInvalid: Boolean = max30Pct >= 27.0 || max100Pct >= 20.0 || above180Seconds >= 90.0
 
-      case _ =>
-        Left(s"Expected LAT,LON[,NAME], got: $raw")
+  case class EvidenceCandidate(corridor: String, windowM: Double, s: Double, grade1Pct: Double, grade2Pct: Double, commonPct: Double)
+  case class EvidenceApplication(corridor: String, severity: Double, details: Vector[String])
 
-  private def point(latRaw: String, lonRaw: String): Either[String, Point] =
-    for
-      lat <- latRaw.toDoubleOption.toRight(s"Invalid latitude: $latRaw")
-      lon <- lonRaw.toDoubleOption.toRight(s"Invalid longitude: $lonRaw")
-    yield Point(lat, lon)
-
-  private def validate(options: CliOptions): Either[String, Unit] =
-    Vector(
-      Option.when(options.avoidBadSurfaces < 0.0 || options.avoidBadSurfaces > 1.0)(
-        "--avoid-bad-surfaces must be between 0 and 1"
-      ),
-      Option.when(options.arrivalClimbPenalty < 0.0)("--arrival-climb-penalty must be >= 0"),
-      Option.when(options.riderWeight <= 0.0)("--rider-weight must be > 0"),
-      Option.when(options.bikeWeight <= 0.0)("--bike-weight must be > 0"),
-      Option.when(options.power <= 0.0)("--power must be > 0"),
-      Option.when(options.trailMaxSpeed <= 0.0)("--trail-max-speed must be > 0"),
-      Option.when(options.trailPauseMin < 0.0 || options.trailPauseMin > 30.0)(
-        "--trail-pause-min must be between 0 and 30"
-      ),
-      Option.when(!ValidBikes(options.bike.toLowerCase))(
-        s"--bike must be one of: ${ValidBikes.toSeq.sorted.mkString(", ")}"
-      )
-    ).flatten.headOption.toLeft(())
-
-  private def path(raw: String, option: String): Either[String, Path] =
-    Try(Path.of(raw)).toEither.left.map(_ => s"$option contains an invalid path: $raw")
-
-  private def inputPaths(raw: Seq[String]): Either[String, Vector[Path]] =
-    raw.foldLeft[Either[String, Vector[Path]]](Right(Vector.empty)) { (acc, value) =>
-      for
-        paths <- acc
-        path <- path(value, "input")
-        _ <- Either.cond(
-          Files.isDirectory(path) ||
-            (Files.isRegularFile(path) && path.getFileName.toString.toLowerCase.endsWith(".gpx")),
-          (),
-          s"Positional input must be an existing .gpx file or directory, got: $path"
-        )
-      yield paths :+ path
-    }
-
-object Inputs:
-  def defaultTrailInputs(): Vector[Path] =
-    val dir = Path.of("trails")
-    if !Files.isDirectory(dir) then
-      Vector.empty
-    else
-      val stream = Files.list(dir)
-      try
-        stream.iterator().asScala
-          .filter(p => Files.isRegularFile(p))
-          .filter(p =>
-            p.getFileName.toString.toLowerCase.endsWith(".gpx")
-          )
-          .toVector
-          .sortBy(_.toString)
-      finally
-        stream.close()
-
-  def expand(paths: Vector[Path]): Vector[Path] =
-    paths
-      .flatMap(expandOne)
-      .map(_.toAbsolutePath.normalize)
-      .distinct
-      .sortBy(_.toString)
-
-  private def expandOne(path: Path): Vector[Path] =
-    if Files.isRegularFile(path) then
-      Vector(path)
-    else if Files.isDirectory(path) then
-      // A directory argument denotes one mandatory-trail root only.
-      // Roles below it (avoid/real/ignore) are separate datasets and must
-      // never become mandatory through recursive discovery.
-      val stream = Files.list(path)
-      try
-        stream.iterator().asScala
-          .filter(p => Files.isRegularFile(p))
-          .filter(p => p.getFileName.toString.toLowerCase.endsWith(".gpx"))
-          .toVector
-      finally stream.close()
-    else
-      sys.error(s"Input does not exist: $path")
-
-object ForbiddenTransferInputs:
-  // GPXs here describe corridors that connectors must not substantially reuse.
-  // They are deliberately NOT part of the mandatory technical-trail set.
-  def defaultPaths(): Vector[Path] =
-    val dir = Path.of("trails", "avoid")
-    if !Files.isDirectory(dir) then
-      Vector.empty
-    else
-      val stream = Files.walk(dir)
-      try
-        stream.iterator().asScala
-          .filter(p => Files.isRegularFile(p))
-          .filter { p =>
-              p.getFileName.toString
-                .toLowerCase
-                .endsWith(".gpx")
-          }
-          .map(_.toAbsolutePath.normalize)
-          .toVector
-          .distinct
-          .sortBy(_.toString)
-      finally
-        stream.close()
-
-object Gpx:
-  def read(path: Path): Trail =
-    require(Files.isRegularFile(path), s"GPX file not found: $path")
-    val dbf = DocumentBuilderFactory.newInstance()
-    dbf.setNamespaceAware(true)
-    Try(dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true))
-    Try(dbf.setFeature("http://xml.org/sax/features/external-general-entities", false))
-    Try(dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false))
-    Try(dbf.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false))
-    val in = FileInputStream(path.toFile)
-    try
-      val doc = dbf.newDocumentBuilder().parse(in)
-      val root = doc.getDocumentElement
-      val nonEmptyTracks =
-        elementsByLocalName(
-          root,
-          "trk"
-        ).filter { track =>
-            elementsByLocalName(
-              track,
-              "trkpt"
-            ).nonEmpty
-        }
-      require(
-        nonEmptyTracks.size <= 1,
-        s"Technical GPX $path contains ${nonEmptyTracks.size} non-empty <trk> tracks. " +
-          "Multiple disconnected tracks are unsupported."
-      )
-      val nonEmptyTrackSegments =
-        elementsByLocalName(
-          root,
-          "trkseg"
-        ).filter { segment =>
-            elementsByLocalName(
-              segment,
-              "trkpt"
-            ).nonEmpty
-        }
-      val rootTrackPoints = elementsByLocalName(root, "trkpt")
-      val nodes =
-        if rootTrackPoints.nonEmpty then
-          require(
-            nonEmptyTrackSegments.size <= 1,
-            s"Technical GPX $path contains ${nonEmptyTrackSegments.size} non-empty <trkseg> segments. " +
-              "Multiple disconnected segments are unsupported because silently concatenating them would create an artificial trail segment."
-          )
-          val selected = nonEmptyTrackSegments.headOption
-              .map { segment =>
-                  elementsByLocalName(segment, "trkpt")
-              }
-              .getOrElse(rootTrackPoints)
-          selected
-        else
-          val routes =
-            elementsByLocalName(
-              root,
-              "rte"
-            ).filter { route =>
-                elementsByLocalName(
-                  route,
-                  "rtept"
-                ).nonEmpty
-            }
-          require(
-            routes.size <= 1,
-            s"Technical GPX $path contains ${routes.size} non-empty <rte> routes. " +
-              "Multiple disconnected routes are unsupported."
-          )
-          val rtepts = routes.headOption
-              .map { route =>
-                  elementsByLocalName(route, "rtept")
-              }
-              .getOrElse(elementsByLocalName(root, "rtept"))
-          if rtepts.nonEmpty then rtepts
-          else sys.error(s"No <trkpt> or <rtept> points found in $path")
-      val points =
-        nodes.zipWithIndex.map {
-          case (
-                e,
-                index
-              ) =>
-            val lat =
-              attr(
-                e,
-                "lat"
-              ).toDouble
-            val lon =
-              attr(
-                e,
-                "lon"
-              ).toDouble
-            val ele =
-              childText(
-                e,
-                "ele"
-              ).flatMap(_.toDoubleOption)
-            require(
-              java.lang.Double.isFinite(
-                lat
-              ) &&
-                lat >= -90.0 &&
-                lat <= 90.0,
-              s"Invalid latitude at point ${index + 1} in $path: $lat"
-            )
-            require(
-              java.lang.Double.isFinite(
-                lon
-              ) &&
-                lon >= -180.0 &&
-                lon <= 180.0,
-              s"Invalid longitude at point ${index + 1} in $path: $lon"
-            )
-            ele.foreach { elevation =>
-              require(
-                java.lang.Double.isFinite(
-                  elevation
-                ),
-                s"Invalid elevation at point ${index + 1} in $path: $elevation"
-              )
-            }
-            Point(lat, lon, ele)
-        }.toVector
-      require(
-        points.size >= 2,
-        s"Need at least 2 points in $path, found ${points.size}"
-      )
-      val name = firstTrackName(root)
-          .filter(_.nonEmpty)
-          .getOrElse(stripGpx(path.getFileName.toString))
-      Trail(path.toAbsolutePath.normalize, name, points)
-    finally in.close()
-
-  def write(path: Path, trackName: String, description: String, points: Vector[Point]): Unit =
-    Option(path.getParent).foreach(p => Files.createDirectories(p))
-    val out = Files.newOutputStream(path)
-    val w = XMLOutputFactory.newFactory().createXMLStreamWriter(out, "UTF-8")
-    try
-      w.writeStartDocument("UTF-8", "1.0")
-      w.writeCharacters("\n")
-      w.writeStartElement("gpx")
-      w.writeDefaultNamespace("http://www.topografix.com/GPX/1/1")
-      w.writeAttribute("version", "1.1")
-      w.writeAttribute("creator", "trail-plan.scala")
-      w.writeCharacters("\n  ")
-      w.writeStartElement("metadata")
-      w.writeCharacters("\n    ")
-      w.writeStartElement("name")
-      w.writeCharacters(trackName)
-      w.writeEndElement()
-      w.writeCharacters("\n    ")
-      w.writeStartElement("desc")
-      w.writeCharacters(description)
-      w.writeEndElement()
-      w.writeCharacters("\n  ")
-      w.writeEndElement()
-      w.writeCharacters("\n  ")
-      w.writeStartElement("trk")
-      w.writeCharacters("\n    ")
-      w.writeStartElement("name")
-      w.writeCharacters(trackName)
-      w.writeEndElement()
-      w.writeCharacters("\n    ")
-      w.writeStartElement("trkseg")
-      points.foreach { p =>
-        w.writeCharacters("\n      ")
-        w.writeStartElement("trkpt")
-        w.writeAttribute("lat", f"${p.lat}%.7f")
-        w.writeAttribute("lon", f"${p.lon}%.7f")
-        p.ele.foreach { e =>
-          w.writeCharacters("\n        ")
-          w.writeStartElement("ele")
-          w.writeCharacters(f"$e%.1f")
-          w.writeEndElement()
-          w.writeCharacters("\n      ")
-        }
-        w.writeEndElement()
-      }
-      w.writeCharacters("\n    ")
-      w.writeEndElement()
-      w.writeCharacters("\n  ")
-      w.writeEndElement()
-      w.writeCharacters("\n")
-      w.writeEndElement()
-      w.writeCharacters("\n")
-      w.writeEndDocument()
-      w.flush()
-    finally
-      Try(w.close())
-      out.close()
-
-  private def stripGpx(s: String): String =
-    if s.toLowerCase.endsWith(".gpx") then s.dropRight(4) else s
-
-  private def firstTrackName(root: Element): Option[String] =
-    val tracks = elementsByLocalName(root, "trk")
-    tracks.headOption.flatMap(t => childText(t, "name"))
-      .orElse {
-        val routes = elementsByLocalName(root, "rte")
-        routes.headOption.flatMap(r => childText(r, "name"))
-      }
-
-  private def elementsByLocalName(root: Element, wanted: String): Vector[Element] =
-    val all = root.getElementsByTagName("*")
-    (0 until all.getLength).iterator.flatMap { i =>
-      all.item(i) match
-        case e: Element if localName(e) == wanted => Some(e)
-        case _                                     => None
-    }.toVector
-
-  private def localName(n: Node): String =
-    Option(n.getLocalName).getOrElse {
-      val raw = n.getNodeName
-      raw.substring(raw.lastIndexOf(':') + 1)
-    }
-
-  private def attr(e: Element, name: String): String =
-    val value = e.getAttribute(name)
-    if value == null || value.isBlank then
-      sys.error(s"Missing @$name on <${localName(e)}>")
-    value
-
-  private def childText(e: Element, wanted: String): Option[String] =
-    val children = e.getChildNodes
-    (0 until children.getLength).iterator.flatMap { i =>
-      children.item(i) match
-        case child: Element if localName(child) == wanted => Some(child)
-        case _                                             => None
-    }.nextOption().flatMap(child => Option(child.getTextContent).map(_.trim).filter(_.nonEmpty))
-
-case class RealRideSample(point: Point, epochSeconds: Double, speedMps: Option[Double], segmentIndex: Int)
-
-case class RealRide(path: Path, name: String, samples: Vector[RealRideSample])
-
-object RealRideGpx:
-  def defaultPaths(): Vector[Path] =
-    val dir = Path.of("trails", "real")
-    if !Files.isDirectory(dir) then
-      Vector.empty
-    else
-      val stream = Files.list(dir)
-      try
-        stream.iterator().asScala
-          .filter(p => Files.isRegularFile(p))
-          .filter { p =>
-              p.getFileName.toString
-                .toLowerCase
-                .endsWith(".gpx")
-          }
-          .toVector
-          .sortBy(_.toString)
-      finally
-        stream.close()
-
-  def read(path: Path): RealRide =
-    require(Files.isRegularFile(path), s"Real ride GPX not found: $path")
-    val dbf = DocumentBuilderFactory.newInstance()
-    dbf.setNamespaceAware(true)
-    Try(dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true))
-    Try(dbf.setFeature("http://xml.org/sax/features/external-general-entities", false))
-    Try(dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false))
-    Try(dbf.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false))
-    val in = FileInputStream(path.toFile)
-    try
-      val doc = dbf.newDocumentBuilder()
-          .parse(in)
-      val root = doc.getDocumentElement
-
-      // A phone recording may legitimately contain several GPX tracks or
-      // track segments after a pause/app restart. Keep all of them as ONE
-      // recording (one phone), but preserve each continuity segment explicitly.
-      // Downstream trail/transfer matching is forbidden from crossing a segment
-      // boundary, so a 20-minute / 900-m recording gap cannot become a fake
-      // ridden connector.
-      val nonEmptyTracks =
-        elementsByLocalName(
-          root,
-          "trk"
-        ).filter { track =>
-            elementsByLocalName(
-              track,
-              "trkpt"
-            ).nonEmpty
-        }
-      val sampleSegments =
-        if nonEmptyTracks.nonEmpty then
-          nonEmptyTracks.flatMap { track =>
-            val trackSegments =
-              elementsByLocalName(
-                track,
-                "trkseg"
-              ).filter { segment =>
-                  elementsByLocalName(
-                    segment,
-                    "trkpt"
-                  ).nonEmpty
-              }
-            if trackSegments.nonEmpty then
-              trackSegments.map { segment =>
-                  elementsByLocalName(segment, "trkpt")
-              }
-            else
-              Vector(
-                elementsByLocalName(track, "trkpt")
-              ).filter(_.nonEmpty)
-          }
-        else
-          Vector(
-            elementsByLocalName(root, "trkpt")
-          ).filter(_.nonEmpty)
-      val samples =
-        val out = Vector.newBuilder[RealRideSample]
-        var nextContinuityIndex = 0
-        sampleSegments.foreach { trackPoints =>
-          var continuityIndex = nextContinuityIndex
-          nextContinuityIndex +=
-            1
-          trackPoints.foreach { e =>
-            val lat =
-              Option(
-                e.getAttribute("lat")
-              ).flatMap(
-                _.toDoubleOption
-              ).filter { value =>
-                  java.lang.Double.isFinite(value) &&
-                    value >= -90.0 &&
-                    value <= 90.0
-              }
-            val lon =
-              Option(
-                e.getAttribute("lon")
-              ).flatMap(
-                _.toDoubleOption
-              ).filter { value =>
-                  java.lang.Double.isFinite(value) &&
-                    value >= -180.0 &&
-                    value <= 180.0
-              }
-            val ele =
-              childText(
-                e,
-                "ele"
-              ).flatMap(
-                _.toDoubleOption
-              ).filter { value =>
-                  java.lang.Double.isFinite(value)
-              }
-            val epoch =
-              childText(
-                e,
-                "time"
-              ).flatMap { raw =>
-                Try(
-                  Instant.parse(raw)
-                    .toEpochMilli
-                    .toDouble / 1000.0
-                ).toOption
-                  .filter(java.lang.Double.isFinite)
-              }
-            val speed =
-              descendantAttribute(
-                e,
-                "meta",
-                "s"
-              ).flatMap(
-                _.toDoubleOption
-              ).filter { value =>
-                  java.lang.Double.isFinite(value)
-              }
-            (
-              lat,
-              lon,
-              epoch
-            ) match
-              case (
-                    Some(la),
-                    Some(lo),
-                    Some(t)
-                  ) =>
-                out +=
-                  RealRideSample(
-                    Point(
-                      la,
-                      lo,
-                      ele
-                    ),
-                    t,
-                    speed,
-                    continuityIndex
-                  )
-              case _ =>
-                // Dropping an invalid required sample must also break continuity;
-                // otherwise the valid samples on either side become a fake bridge.
-                continuityIndex = nextContinuityIndex
-                nextContinuityIndex +=
-                  1
-          }
-        }
-        out.result()
-      require(samples.size >= 2, s"Need timestamped track points in real ride GPX $path")
-      val name =
-        elementsByLocalName(
-          root,
-          "trk"
-        ).headOption
-          .flatMap { t =>
-              childText(t, "name")
-          }
-          .filter(_.nonEmpty)
-          .getOrElse(path.getFileName.toString)
-      RealRide(path.toAbsolutePath.normalize, name, samples)
-    finally
-      in.close()
-
-  private def elementsByLocalName(root: Element, wanted: String): Vector[Element] =
-    val all = root.getElementsByTagName("*")
-    (0 until all.getLength).iterator.flatMap { i =>
-      all.item(i) match
-        case e: Element if localName(e) == wanted => Some(e)
-        case _                                     => None
-    }.toVector
-
-  private def localName(n: Node): String =
-    Option(
-      n.getLocalName
-    ).getOrElse {
-      val raw = n.getNodeName
-      raw.substring(raw.lastIndexOf(':') + 1)
-    }
-
-  private def childText(e: Element, wanted: String): Option[String] =
-    val children = e.getChildNodes
-    (0 until children.getLength).iterator.flatMap { i =>
-      children.item(i) match
-        case child: Element if localName(child) == wanted => Some(child)
-        case _                                             => None
-    }.nextOption().flatMap(child => Option(child.getTextContent).map(_.trim).filter(_.nonEmpty))
-
-  private def descendantAttribute(e: Element, wantedLocalName: String, attribute: String): Option[String] =
-    val all = e.getElementsByTagName("*")
-    (0 until all.getLength).iterator.flatMap { i =>
-      all.item(i) match
-        case child: Element if localName(child) == wantedLocalName =>
-          Option(child.getAttribute(attribute)).map(_.trim).filter(_.nonEmpty)
-        case _ =>
-          None
-    }.nextOption()
-
-object Geometry:
-  private val EarthRadiusM = 6371000.0
-
-  def distanceMeters(a: Point, b: Point): Double =
-    val p1 = math.toRadians(a.lat)
-    val p2 = math.toRadians(b.lat)
-    val dp = math.toRadians(b.lat - a.lat)
-    val dl = math.toRadians(b.lon - a.lon)
-    val h = math.sin(dp / 2) * math.sin(dp / 2) +
-        math.cos(p1) * math.cos(p2) *
-          math.sin(dl / 2) * math.sin(dl / 2)
-    2 * EarthRadiusM * math.asin(math.min(1.0, math.sqrt(h)))
-
-  def pathLengthMeters(points: Vector[Point]): Double =
-    points.sliding(2).map {
-      case Vector(a, b) => distanceMeters(a, b)
-      case _            => 0.0
-    }.sum
-
-  case class PolylineProjection(alongM: Double, lateralM: Double)
-
-  def projectToPolyline(p: Point, polyline: Vector[Point]): Option[PolylineProjection] =
-    if polyline.size < 2 then
-      None
-    else
-      val lat0 = math.toRadians(p.lat)
-
-      def xy(q: Point): (Double, Double) =
-        val x =
-          math.toRadians(
-            q.lon - p.lon
-          ) *
-            EarthRadiusM *
-            math.cos(lat0)
-        val y =
-          math.toRadians(
-            q.lat - p.lat
-          ) *
-            EarthRadiusM
-        (x, y)
-
-      var bestLateral = Double.PositiveInfinity
-      var bestAlong = 0.0
-      var cumulative = 0.0
-      var i = 0
-      while i + 1 < polyline.size do
-        val a = polyline(i)
-        val b = polyline(i + 1)
-        val segmentM = distanceMeters(a, b)
-        val (ax, ay) =
-          xy(a)
-        val (bx, by) =
-          xy(b)
-        val vx = bx - ax
-        val vy = by - ay
-        val vv = vx * vx +
-            vy * vy
-        val t =
-          if vv <= 1e-9 then
-            0.0
-          else
-            math.max(
-              0.0,
-              math.min(
-                1.0,
-                -(
-                  ax * vx +
-                    ay * vy
-                ) / vv
-              )
-            )
-        val dx = ax +
-            t * vx
-        val dy = ay +
-            t * vy
-        val lateral = math.hypot(dx, dy)
-        if lateral < bestLateral then
-          bestLateral = lateral
-          bestAlong =
-            cumulative +
-              t * segmentM
-        cumulative +=
-          segmentM
-        i += 1
-      Some(PolylineProjection(bestAlong, bestLateral))
-
-  def pointsWithCumulativeDistance(points: Vector[Point]): Vector[(Double, Point)] =
-    if points.isEmpty then
-      Vector.empty
-    else
-      val out = Vector.newBuilder[(Double, Point)]
-      var cumulative = 0.0
-      out +=
-        ((
-          0.0,
-          points.head
-        ))
-      var i = 1
-      while i < points.size do
-        cumulative +=
-          distanceMeters(points(i - 1), points(i))
-        out +=
-          ((
-            cumulative,
-            points(i)
-          ))
-        i += 1
-      out.result()
-
-  // Horizontal winding of the supplied trail geometry. 1.0 is straight;
-  // values above 1 mean the ridden line is longer than its start/end chord.
-  // Rider speed is deliberately irrelevant.
-  def sinuosity(points: Vector[Point]): Double =
-    if points.size < 2 then 1.0
-    else
-      val length = pathLengthMeters(points)
-      val chord = distanceMeters(points.head, points.last)
-      if length <= 1e-9 then 1.0
-      else if chord <= 1e-6 then Double.PositiveInfinity
-      else length / chord
-
-  case class DescentSinuosityWindow(centerM: Double, distanceM: Double, netDescentPct: Double, sinuosity: Double)
-
-  private def pointAtPathDistance(profile: Vector[(Double, Point)], targetM: Double): Option[Point] =
-    if profile.isEmpty ||
-        targetM < -1e-9 ||
-        targetM > profile.last._1 + 1e-9
-    then
-      None
-    else if targetM <= 0.0 then
-      Some(profile.head._2)
-    else if targetM >= profile.last._1 then
-      Some(profile.last._2)
-    else
-      var low = 0
-      var high = profile.size - 1
-      while high - low > 1 do
-        val mid =
-          (
-            low +
-              high
-          ) /
-            2
-        if profile(mid)._1 <= targetM
-        then
-          low = mid
-        else
-          high = mid
-      val (
-        d0,
-        p0
-      ) =
-        profile(low)
-      val (
-        d1,
-        p1
-      ) =
-        profile(high)
-      val span = d1 -
-          d0
-      if span <= 1e-12 then
-        Some(p0)
-      else
-        val t =
-          math.max(
-            0.0,
-            math.min(
-              1.0,
-              (
-                targetM -
-                  d0
-              ) /
-                span
-            )
-          )
-        val ele =
-          (
-            p0.ele,
-            p1.ele
-          ) match
-            case (
-                  Some(a),
-                  Some(b)
-                ) =>
-              Some(
-                a +
-                  (
-                    b -
-                      a
-                  ) *
-                    t
-              )
-            case _ =>
-              None
-        Some(
-          Point(
-            lat =
-              p0.lat +
-                (
-                  p1.lat -
-                    p0.lat
-                ) *
-                  t,
-            lon =
-              p0.lon +
-                (
-                  p1.lon -
-                    p0.lon
-                ) *
-                  t,
-            ele = ele
-          )
-        )
-
-  private def localWindowAtStart(profile: Vector[(Double, Point)], startM: Double, windowM: Double): Option[DescentSinuosityWindow] =
-    for
-      start <-
-        pointAtPathDistance(profile, startM)
-      end <-
-        pointAtPathDistance(
-          profile,
-          startM +
-            windowM
-        )
-    yield
-      val netDescentPct =
-        (
-          start.ele,
-          end.ele
-        ) match
-          case (
-                Some(a),
-                Some(b)
-              ) =>
-            math.max(
-              0.0,
-              a -
-                b
-            ) /
-              windowM *
-              100.0
-          case _ =>
-            0.0
-      val chordM = distanceMeters(start, end)
-      val localSinuosity =
-        if chordM <= 1e-6 then Double.PositiveInfinity
-        else windowM /
-            chordM
-      DescentSinuosityWindow(
-        centerM =
-          startM +
-            windowM /
-              2.0,
-        distanceM = windowM,
-        netDescentPct = netDescentPct,
-        sinuosity = localSinuosity
-      )
-
-  private def uniqueSortedDistances(values: Vector[Double], epsilonM: Double = 1e-6): Vector[Double] =
-    values.sorted.foldLeft(
-      Vector.empty[Double]
-    ) {
-      case (
-            acc,
-            value
-          ) =>
-        if acc.isEmpty ||
-            math.abs(
-              acc.last -
-                value
-            ) >
-              epsilonM
-        then
-          acc :+
-            value
-        else
-          acc
-    }
-
-  private def minimizeWindowChordStart(profile: Vector[(Double, Point)], windowM: Double, leftM: Double, rightM: Double): Double =
-    if rightM -
-        leftM <=
-        1e-6
-    then
-      (
-        leftM +
-          rightM
-      ) /
-        2.0
-    else
-      def chord(startM: Double): Double =
-        (
-          pointAtPathDistance(
-            profile,
-            startM
-          ),
-          pointAtPathDistance(
-            profile,
-            startM +
-              windowM
-          )
-        ) match
-          case (
-                Some(a),
-                Some(b)
-              ) =>
-            distanceMeters(a, b)
-          case _ =>
-            Double.PositiveInfinity
-
-      val golden =
-        (
-          math.sqrt(
-            5.0
-          ) -
-            1.0
-        ) /
-          2.0
-      var a = leftM
-      var b = rightM
-      var x1 = b -
-          golden *
-            (
-              b -
-                a
-            )
-      var x2 = a +
-          golden *
-            (
-              b -
-                a
-            )
-      var f1 = chord(x1)
-      var f2 = chord(x2)
-      var iteration = 0
-      while iteration < 48 &&
-          b -
-            a >
-            1e-4
-      do
-        if f1 <= f2 then
-          b = x2
-          x2 = x1
-          f2 = f1
-          x1 =
-            b -
-              golden *
-                (
-                  b -
-                    a
-                )
-          f1 = chord(x1)
-        else
-          a = x1
-          x1 = x2
-          f1 = f2
-          x2 =
-            a +
-              golden *
-                (
-                  b -
-                    a
-                )
-          f2 = chord(x2)
-        iteration +=
-          1
-      (
-        a +
-          b
-      ) /
-        2.0
-
-  private def bisectWindowChordThreshold(
-      profile: Vector[(Double, Point)],
-      windowM: Double,
-      targetChordM: Double,
-      leftM: Double,
-      rightM: Double
-  ): Option[Double] =
-    def value(startM: Double): Option[Double] =
-      for
-        a <-
-          pointAtPathDistance(profile, startM)
-        b <-
-          pointAtPathDistance(
-            profile,
-            startM +
-              windowM
-          )
-      yield
-        distanceMeters(
-          a,
-          b
-        ) -
-          targetChordM
-    (
-      value(
-        leftM
-      ),
-      value(rightM)
-    ) match
-      case (Some(leftValue), Some(rightValue))
-          if java.lang.Double.isFinite(
-              leftValue
-            ) &&
-            java.lang.Double.isFinite(
-              rightValue
-            ) &&
-            leftValue *
-              rightValue <=
-              0.0 =>
-        var a = leftM
-        var b = rightM
-        var fa = leftValue
-        var iteration = 0
-        while iteration < 56 &&
-            b -
-              a >
-              1e-4
-        do
-          val mid =
-            (
-              a +
-                b
-            ) /
-              2.0
-          val fm =
-            value(
-              mid
-            ).getOrElse(Double.NaN)
-          if !java.lang.Double.isFinite(fm)
-          then
-            return None
-          if fa *
-              fm <=
-              0.0
-          then
-            b = mid
-          else
-            a = mid
-            fa = fm
-          iteration +=
-            1
-        Some(
-          (
-            a +
-              b
-          ) /
-            2.0
-        )
-      case _ =>
-        None
-
-  def descentSinuosityWindows(
-      points: Vector[Point],
-      windowM: Double,
-      minNetDescentPct: Double,
-      minSinuosity: Double
-  ): Vector[DescentSinuosityWindow] =
-    if points.size < 2 ||
-        windowM <= 0.0 ||
-        minNetDescentPct < 0.0 ||
-        minSinuosity <= 0.0
-    then
-      Vector.empty
-    else
-      val dense = resample(points, 5.0)
-      val profile = pointsWithCumulativeDistance(dense)
-      if profile.size < 2 ||
-          profile.last._1 <
-            windowM
-      then
-        Vector.empty
-      else
-        val totalM = profile.last._1
-        val maxStartM = totalM -
-            windowM
-        val critical =
-          uniqueSortedDistances(
-            (
-              Vector(
-                0.0,
-                maxStartM
-              ) ++
-                profile.flatMap {
-                  case (
-                        distanceM,
-                        _
-                      ) =>
-                    Vector(
-                      distanceM,
-                      distanceM -
-                        windowM
-                    )
-                }
-            ).filter(
-              value =>
-                value >= -1e-9 &&
-                  value <= maxStartM + 1e-9
-            ).map { value =>
-                math.max(0.0, math.min(maxStartM, value))
-            }
-          )
-        val candidateStarts = mutable.ArrayBuffer[Double]()
-        candidateStarts ++=
-          critical
-        val targetDescentM = minNetDescentPct /
-            100.0 *
-            windowM
-        val targetChordM = windowM /
-            minSinuosity
-        critical.sliding(2).foreach {
-          case Vector(leftM, rightM)
-              if rightM >
-                leftM + 1e-9 =>
-            val leftWindow = localWindowAtStart(profile, leftM, windowM)
-            val rightWindow = localWindowAtStart(profile, rightM, windowM)
-
-            // Net descent is linear inside a critical interval. Add the exact
-            // threshold crossing, if any, so the conjunction with sinuosity
-            // cannot be missed merely because the crossing lies off-grid.
-            (
-              leftWindow,
-              rightWindow
-            ) match
-              case (
-                    Some(left),
-                    Some(right)
-                  ) =>
-                val leftDescentM = left.netDescentPct /
-                    100.0 *
-                    windowM
-                val rightDescentM = right.netDescentPct /
-                    100.0 *
-                    windowM
-                val leftDelta = leftDescentM -
-                    targetDescentM
-                val rightDelta = rightDescentM -
-                    targetDescentM
-                if leftDelta *
-                    rightDelta <
-                    0.0 &&
-                    math.abs(
-                      rightDescentM -
-                        leftDescentM
-                    ) >
-                      1e-12
-                then
-                  val t =
-                    (
-                      targetDescentM -
-                        leftDescentM
-                    ) /
-                      (
-                        rightDescentM -
-                          leftDescentM
-                      )
-                  candidateStarts +=
-                    leftM +
-                      (
-                        rightM -
-                          leftM
-                      ) *
-                        t
-              case _ =>
-            val minimumChordStart = minimizeWindowChordStart(profile, windowM, leftM, rightM)
-            candidateStarts +=
-              minimumChordStart
-
-            def chordDelta(startM: Double): Option[Double] =
-              for
-                start <-
-                  pointAtPathDistance(profile, startM)
-                end <-
-                  pointAtPathDistance(
-                    profile,
-                    startM +
-                      windowM
-                  )
-              yield
-                distanceMeters(
-                  start,
-                  end
-                ) -
-                  targetChordM
-
-            val leftChordDelta = chordDelta(leftM)
-            val minimumChordDelta = chordDelta(minimumChordStart)
-            val rightChordDelta = chordDelta(rightM)
-            (
-              leftChordDelta,
-              minimumChordDelta
-            ) match
-              case (Some(a), Some(b))
-                  if a *
-                      b <
-                      0.0 =>
-                bisectWindowChordThreshold(
-                  profile,
-                  windowM,
-                  targetChordM,
-                  leftM,
-                  minimumChordStart
-                ).foreach(
-                  candidateStarts +=
-                    _
-                )
-              case _ =>
-            (
-              minimumChordDelta,
-              rightChordDelta
-            ) match
-              case (Some(a), Some(b))
-                  if a *
-                      b <
-                      0.0 =>
-                bisectWindowChordThreshold(
-                  profile,
-                  windowM,
-                  targetChordM,
-                  minimumChordStart,
-                  rightM
-                ).foreach(
-                  candidateStarts +=
-                    _
-                )
-              case _ =>
-          case _ =>
-        }
-        uniqueSortedDistances(
-          candidateStarts.toVector
-        ).flatMap { startM =>
-            localWindowAtStart(profile, startM, windowM)
-        }
-
-  def ascentDescent(points: Vector[Point]): (Double, Double) =
-    points.sliding(2).foldLeft((0.0, 0.0)) {
-      case ((up, down), Vector(a, b)) =>
-        (a.ele, b.ele) match
-          case (Some(x), Some(y)) if y >= x => (up + y - x, down)
-          case (Some(x), Some(y))           => (up, down + x - y)
-          case _                            => (up, down)
-      case (totals, _) =>
-        totals
-    }
-
-  def exponentiallyWeightedAscentNearEnd(points: Vector[Point], decayM: Double): Double =
-    if decayM <= 0.0 || points.size < 2 then 0.0
-    else
-      points.sliding(2).toVector.reverse.foldLeft((0.0, 0.0)) {
-        case ((weighted, distanceFromEndM), Vector(a, b)) =>
-          val segmentM = distanceMeters(a, b)
-          if segmentM <= 0.0 then
-            (weighted, distanceFromEndM)
-          else
-            val added = (a.ele, b.ele) match
-                case (Some(z0), Some(z1)) if z1 > z0 =>
-                  val midpointFromEndM = distanceFromEndM + segmentM * 0.5
-                  (z1 - z0) * math.exp(-midpointFromEndM / decayM)
-                case _ =>
-                  0.0
-            (weighted + added, distanceFromEndM + segmentM)
-        case (state, _) =>
-          state
-      }._1
-  private case class GradeChunk(
-      distanceM: Double,
-      deltaM: Double
+  case class Connector(
+      id: String,
+      from: String,
+      to: String,
+      profile: Profile,
+      // Dense (10 m) /route geometry with Valhalla elevation. This is the
+      // canonical connector profile for wall/physics/ascent/evidence and GPX
+      // reconstruction. Keep it independent from trace shape indices.
+      geometry: Vector[Point],
+      // Exact edge_walk shape with its own elevation. EdgeAttr begin/end indices
+      // refer ONLY to this geometry and road-safety code must use it.
+      traceGeometry: Vector[Point],
+      rawSeconds: Double,
+      edges: Vector[EdgeAttr],
+      roadStressSeconds: Double,
+      ascentM: Double,
+      crr: Double,
+      rider: RiderMetrics,
+      wall: WallMetrics,
+      physicalWall: Double,
+      evidenceFloor: Double,
+      effectiveWall: Double,
+      evidence: Vector[EvidenceApplication],
+      avoidWarnings: Vector[(String, Double)],
+      safetyProvenance: Vector[String]
   ):
-    def grade: Double =
-      if distanceM > 0.0 then deltaM / distanceM else 0.0
+    def signature: String = id
 
-  def resample(points: Vector[Point], spacingM: Double): Vector[Point] =
-    if points.size < 2 || spacingM <= 0.0 then points
+  enum Mode:
+    case LOOP, P2P
+    def finishKey: String = this match
+      case LOOP => "FINISH_LOOP"
+      case P2P => "FINISH_P2P"
+    def finishPoint: Point = this match
+      case LOOP => LoopFinish
+      case P2P => P2PFinish
+    def finishName: String = this match
+      case LOOP => StartName
+      case P2P => P2PFinishName
+
+  case class RawLabel(mask: Int, last: Int, wall: Double, transfer: Double, road: Double, order: Vector[Int], connectors: Vector[Connector]):
+    def signature(trails: Vector[Trail], mode: Option[Mode] = None): String =
+      val base = order.map(i => trails(i).name).mkString("->") + "|" + connectors.map(_.id).mkString(";")
+      mode.fold(base)(m => base + "|" + m.toString)
+
+  case class RawTerminal(mode: Mode, wall: Double, transfer: Double, road: Double, order: Vector[Int], connectors: Vector[Connector], signature: String)
+  case class Breakpoint(mode: Mode, ceiling: Double, transfer: Double, road: Double, signature: String)
+
+  case class ClimbState(count: Int, maxAscent: Double, upward: Double, roughness: Double, prevAscent: Option[Double], prevDelta: Option[Double]):
+    def add(ascent: Double, connectorOrdinal: Int): ClimbState =
+      if connectorOrdinal < 2 then this
+      else prevAscent match
+        case None => ClimbState(1, ascent, upward, roughness, Some(ascent), None)
+        case Some(p) =>
+          val d = ascent - p
+          val up2 = upward + math.max(0.0, d)
+          val rough2 = roughness + prevDelta.map(pd => math.abs(d - pd)).getOrElse(0.0)
+          ClimbState(count + 1, math.max(maxAscent, ascent), up2, rough2, Some(ascent), Some(d))
+
+  object ClimbState:
+    val Empty = ClimbState(0,0,0,0,None,None)
+
+  case class RiderLabel(
+      mask: Int,
+      last: Int,
+      transfer: Double,
+      road: Double,
+      requiredWall: Double,
+      rider: RiderMetrics,
+      climb: ClimbState,
+      warmupPenalty: Int,
+      demandingAdjacency: Int,
+      order: Vector[Int],
+      connectors: Vector[Connector]
+  ):
+    def signature(trails: Vector[Trail]): String = order.map(i => trails(i).name).mkString("->") + "|" + connectors.map(_.id).mkString(";")
+
+  case class RiderTerminal(
+      mode: Mode,
+      transfer: Double,
+      road: Double,
+      requiredWall: Double,
+      rider: RiderMetrics,
+      climb: ClimbState,
+      warmupPenalty: Int,
+      demandingAdjacency: Int,
+      order: Vector[Int],
+      connectors: Vector[Connector],
+      signature: String
+  )
+
+  case class AuditResult(failures: Vector[String], warnings: Vector[String]):
+    def ok: Boolean = failures.isEmpty
+    def status: String = if failures.nonEmpty then "FAIL" else if warnings.nonEmpty then "WARN" else "PASS"
+
+  case class Diagnostics(
+      var generated: Long = 0,
+      var noRoute: Long = 0,
+      var retained: Long = 0,
+      var acceptedVariants: Long = 0,
+      hardRejects: mutable.Map[String, Long] = mutable.Map.empty.withDefaultValue(0L),
+      var evidenceApplied: Long = 0,
+      var safetyReroutes: Long = 0,
+      var safetyBlockedProfiles: Long = 0,
+      safetyRerouteCorridors: mutable.Map[String, Long] = mutable.Map.empty.withDefaultValue(0L),
+      rawFrontierSizes: mutable.Map[String, Int] = mutable.Map.empty,
+      riderFrontierSizes: mutable.Map[String, Int] = mutable.Map.empty,
+      timings: mutable.ArrayBuffer[(String, Double)] = mutable.ArrayBuffer.empty
+  ):
+    def reject(reason: String): Unit = hardRejects(reason) = hardRejects(reason) + 1
+    def reroute(corridor: String): Unit =
+      safetyReroutes += 1
+      safetyRerouteCorridors(corridor) = safetyRerouteCorridors(corridor) + 1
+
+  case class Cli(
+      input: Option[Path],
+      output: Option[Path],
+      valhallaUrl: Option[String],
+      runTests: Boolean,
+      help: Boolean
+  )
+
+  type Result[A] = Either[String,A]
+
+  def boundary[A](label:String)(body: => A):Result[A] =
+    Try(body).toEither.left.map { e =>
+      val detail=Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
+      s"$label: $detail"
+    }
+
+  def parseCli(args:Array[String]):Result[Cli] =
+    def loop(
+        i:Int,
+        input:Option[Path],
+        output:Option[Path],
+        url:Option[String],
+        runTests:Boolean,
+        help:Boolean
+    ):Result[Cli] =
+      if i >= args.length then Right(Cli(input,output,url,runTests,help))
+      else
+        args(i) match
+          case "--input" =>
+            if i + 1 >= args.length then Left("--input requires DIR")
+            else loop(i+2,Some(Paths.get(args(i+1))),output,url,runTests,help)
+          case "--output" =>
+            if i + 1 >= args.length then Left("--output requires DIR")
+            else loop(i+2,input,Some(Paths.get(args(i+1))),url,runTests,help)
+          case "--valhalla-url" =>
+            if i + 1 >= args.length then Left("--valhalla-url requires URL")
+            else loop(i+2,input,output,Some(args(i+1).stripSuffix("/")),runTests,help)
+          case "--no-test" => loop(i+1,input,output,url,false,help)
+          case "--help" | "-h" => loop(i+1,input,output,url,runTests,true)
+          case "--self-test" => Left("--self-test was removed; tests run by default, use --no-test to skip them")
+          case other => Left(s"unknown argument: $other")
+
+    loop(0,None,None,None,true,false)
+
+
+  def nfc(s: String): String = Normalizer.normalize(s, Normalizer.Form.NFC)
+
+  def haversine(a: Point, b: Point): Double =
+    val la1 = math.toRadians(a.lat); val la2 = math.toRadians(b.lat)
+    val dlat = la2 - la1; val dlon = math.toRadians(b.lon - a.lon)
+    val h = math.sin(dlat/2)*math.sin(dlat/2) + math.cos(la1)*math.cos(la2)*math.sin(dlon/2)*math.sin(dlon/2)
+    2.0 * EarthR * math.asin(math.min(1.0, math.sqrt(h)))
+
+  def cumulative(points: Vector[Point]): Vector[Double] =
+    val out = Array.ofDim[Double](points.size)
+    var i = 1
+    while i < points.size do
+      out(i) = out(i-1) + haversine(points(i-1), points(i)); i += 1
+    out.toVector
+
+  def interpolate(points: Vector[Point], cum: Vector[Double], s: Double): Point =
+    if s <= 0 then points.head
+    else if s >= cum.last then points.last
     else
-      val generated =
-        points.sliding(2).flatMap {
-          case Vector(a, b) =>
-            val segmentM = distanceMeters(a, b)
-            if segmentM <= 0.0 then Iterator.empty
-            else
-              val steps = math.max(1, math.ceil(segmentM / spacingM).toInt)
-              (1 to steps).iterator.map { k =>
-                val t = k.toDouble / steps.toDouble
-                val ele = (a.ele, b.ele) match
-                    case (Some(x), Some(y)) => Some(x + (y - x) * t)
-                    case _                  => None
-                Point(lat = a.lat + (b.lat - a.lat) * t, lon = a.lon + (b.lon - a.lon) * t, ele = ele)
-              }
-          case _ =>
-            Iterator.empty
-        }.toVector
-      val result = points.head +: generated
-      if result.size >= 2 &&
-          distanceMeters(result(result.size - 2), result.last) < 0.05
-      then result.dropRight(1) :+ points.last
+      var lo = 0; var hi = cum.size - 1
+      while lo + 1 < hi do
+        val mid = (lo + hi) >>> 1
+        if cum(mid) <= s then lo = mid else hi = mid
+      val ds = cum(lo+1) - cum(lo)
+      val t = if ds <= 0 then 0.0 else (s - cum(lo)) / ds
+      val a = points(lo); val b = points(lo+1)
+      Point(a.lat + t*(b.lat-a.lat), a.lon + t*(b.lon-a.lon), a.ele + t*(b.ele-a.ele))
+
+  def slicePolyline(points: Vector[Point], fromS: Double, toS: Double): Vector[Point] =
+    val cum = cumulative(points)
+    if points.size < 2 || toS <= fromS || fromS < 0 || toS > cum.last + 1e-9 then Vector.empty
+    else
+      val out = mutable.ArrayBuffer.empty[Point]
+      out += interpolate(points,cum,fromS)
+      points.indices.foreach { i => if cum(i) > fromS + 1e-9 && cum(i) < toS - 1e-9 then out += points(i) }
+      out += interpolate(points,cum,toS)
+      dedupeBoundary(out.toVector)
+
+  def samplePolyline(points:Vector[Point],spacingM:Double):Vector[Point] =
+    if points.size<2 || spacingM<=0 then points
+    else
+      val cum=cumulative(points)
+      if cum.last<=1e-9 then Vector(points.head,points.last)
+      else
+        val distances=mutable.ArrayBuffer.empty[Double]
+        var s=0.0
+        while s<cum.last do
+          distances += s
+          s += spacingM
+        distances += cum.last
+        dedupeBoundary(distances.toVector.map(d => interpolate(points,cum,d)))
+
+  /** Canonical connector-physics resampling: subdivide every raw Valhalla
+   * segment independently so every original shape vertex survives /height. */
+  def resampleConnectorPhysics(points:Vector[Point],spacingM:Double):Vector[Point] =
+    if points.size<2 || spacingM<=0 then points
+    else
+      val generated=points.sliding(2).flatMap {
+        case Vector(a,b) =>
+          val segmentM=haversine(a,b)
+          if segmentM<=0.0 then Iterator.empty
+          else
+            val steps=math.max(1,math.ceil(segmentM/spacingM).toInt)
+            (1 to steps).iterator.map { k =>
+              val t=k.toDouble/steps.toDouble
+              Point(
+                a.lat+(b.lat-a.lat)*t,
+                a.lon+(b.lon-a.lon)*t,
+                a.ele+(b.ele-a.ele)*t
+              )
+            }
+        case _ => Iterator.empty
+      }.toVector
+      val result=points.head +: generated
+      if result.size>=2 && haversine(result(result.size-2),result.last)<0.05 then
+        result.dropRight(1) :+ points.last
       else result
 
-  def profileStats(points: Vector[Point]): ProfileStats =
-    val length = pathLengthMeters(points)
-    val (ascent, descent) = ascentDescent(points)
-    val startEle = points.headOption.flatMap(_.ele)
-    val endEle = points.lastOption.flatMap(_.ele)
-    val net =
-      for
-        a <- startEle
-        b <- endEle
-      yield b - a
-    val chunks = gradeChunks(points, 20.0)
-    val (bestClimbDistance, bestClimbGain, _, _) =
-      chunks.foldLeft((0.0, 0.0, 0.0, 0.0)) {
-        case ((bestDistance, bestGain, runDistance, runGain), chunk)
-            if chunk.grade > 0.01 =>
-          val nextRunDistance = runDistance + chunk.distanceM
-          val nextRunGain = runGain + math.max(0.0, chunk.deltaM)
-          if nextRunDistance > bestDistance then (nextRunDistance, nextRunGain, nextRunDistance, nextRunGain)
-          else (bestDistance, bestGain, nextRunDistance, nextRunGain)
-        case ((bestDistance, bestGain, _, _), _) =>
-          (bestDistance, bestGain, 0.0, 0.0)
+  /** Canonical geometry for protected-corridor policy.
+   *
+   * The co-travel classifier is intentionally segment-local (the 0.55
+   * along-progress test is evaluated on clipped route segments), therefore
+   * feeding arbitrary raw Valhalla segment lengths makes the safety decision
+   * representation-dependent.  Production normalizes every /route shape to
+   * the same segment-wise <=10 m geometry before overlap measurement AND
+   * blocker selection.  This is the same geometric sampling contract used by
+   * connector physics/elevation and preserves every raw Valhalla vertex.
+   */
+  def corridorSafetyGeometry(points: Vector[Point]): Vector[Point] =
+    resampleConnectorPhysics(points, 10.0)
+
+  def exactWindowStarts(cum: Vector[Double], window: Double): Vector[Double] =
+    if cum.isEmpty || cum.last + 1e-9 < window then Vector.empty
+    else
+      val maxStart = cum.last - window
+      val s = mutable.TreeSet.empty[Double]
+      s += 0.0; s += maxStart
+      cum.foreach { x =>
+        if x >= 0 && x <= maxStart then s += x
+        val y = x - window
+        if y >= 0 && y <= maxStart then s += y
       }
-    val longestGrade =
-      if bestClimbDistance > 0.0 then
-        bestClimbGain / bestClimbDistance * 100.0
+      s.toVector
+
+  def maxExactUphillGrade(points: Vector[Point], window: Double): Double =
+    if points.size < 2 then 0.0
+    else
+      val cum = cumulative(points)
+      exactWindowStarts(cum, window).foldLeft(0.0) { (best,s) =>
+        val a = interpolate(points,cum,s); val b = interpolate(points,cum,s+window)
+        math.max(best, 100.0 * (b.ele - a.ele) / window)
+      }
+
+  def demandingMeasurements(points: Vector[Point]): DemandingMeasurements =
+    val cum = cumulative(points)
+    val endpoint = haversine(points.head, points.last)
+    // Canonical reference behavior uses travelled horizontal polyline length.
+    // The greenfield prompt also states an endpoint-chord denominator, but that
+    // contradicts its own canonical demanding-set regression: Autobahn would
+    // become demanding (~10.9% chord-normalized) instead of the required two-trail
+    // set. Preserve the executable canonical contract rather than hardcoding names.
+    val wholeGrade =
+      if cum.last > 1e-9 then 100.0 * math.max(0.0, points.head.ele - points.last.ele) / cum.last
       else 0.0
-    val maxGap =
-      points.sliding(2).map {
-        case Vector(a, b) => distanceMeters(a, b)
-        case _            => 0.0
-      }.foldLeft(0.0)(math.max)
-    ProfileStats(
-      lengthM = length,
-      ascentM = ascent,
-      descentM = descent,
-      netElevationM = net,
-      longestClimbDistanceM = bestClimbDistance,
-      longestClimbAvgGradePct = longestGrade,
-      maxGrade30Pct = maxSustainedGradePct(points, 30.0),
-      maxGrade100Pct = maxSustainedGradePct(points, 100.0),
-      maxPointGapM = maxGap
-    )
-
-  private def gradeChunks(points: Vector[Point], targetM: Double): Vector[GradeChunk] =
-    if points.size < 2 then Vector.empty
-    else
-      val (out, _, _) =
-        points.sliding(2).zipWithIndex.foldLeft(
-          (Vector.newBuilder[GradeChunk], points.head, 0.0)
-        ) {
-          case ((out, anchor, accumulatedM), (Vector(previous, current), index)) =>
-            val nextAccumulatedM = accumulatedM + distanceMeters(previous, current)
-            val flush = nextAccumulatedM >= targetM || index == points.size - 2
-            if flush && nextAccumulatedM > 0.0 then
-              (anchor.ele, current.ele) match
-                case (Some(z0), Some(z1)) =>
-                  out += GradeChunk(nextAccumulatedM, z1 - z0)
-                case _ =>
-              (out, current, 0.0)
-            else
-              (out, anchor, nextAccumulatedM)
-          case (state, _) =>
-            state
-        }
-      out.result()
-
-  // For a piecewise-linear elevation profile, g(s)=z(s+W)-z(s) is itself
-  // piecewise linear. Its slope can change only when s or s+W crosses an
-  // elevation-profile breakpoint. Therefore the true fixed-window extrema are
-  // attained at:
-  //   0, L-W, every breakpoint d, or every shifted breakpoint d-W
-  // that lies in [0, L-W].
-  //
-  // Evaluating exactly this finite set removes the old 10 m phase hole from
-  // the 30/100 m hard wall envelope.
-  private def criticalWindowStarts(profile: Vector[(Double, Double)], windowM: Double): Vector[Double] =
-    if profile.size < 2 ||
-        windowM <= 0.0 ||
-        profile.last._1 < windowM
-    then
-      Vector.empty
-    else
-      val maxStart = profile.last._1 - windowM
-      val starts = mutable.ArrayBuffer[Double](0.0, maxStart)
-      profile.foreach {
-        case (
-              distanceM,
-              _
-            ) =>
-          if distanceM >= -1e-9 &&
-              distanceM <= maxStart + 1e-9
-          then
-            starts +=
-              math.max(0.0, math.min(maxStart, distanceM))
-          val shifted = distanceM - windowM
-          if shifted >= -1e-9 &&
-              shifted <= maxStart + 1e-9
-          then
-            starts +=
-              math.max(0.0, math.min(maxStart, shifted))
+    val wholeSinu =
+      if cum.last <= 1e-9 then 1.0
+      else if endpoint <= 1e-6 then Double.PositiveInfinity
+      else cum.last / endpoint
+    def local(window: Double, gradeThreshold: Double): (Double,Double,Boolean) =
+      var maxGrade = 0.0; var maxSinu = 0.0; var pass = false
+      exactWindowStarts(cum,window).foreach { s =>
+        val a=interpolate(points,cum,s); val b=interpolate(points,cum,s+window)
+        val straight = haversine(a,b)
+        val g = 100.0 * math.max(0.0,a.ele-b.ele)/window
+        val si = if straight > 0 then window/straight else Double.PositiveInfinity
+        maxGrade=math.max(maxGrade,g); maxSinu=math.max(maxSinu,si)
+        if g >= gradeThreshold && si >= 1.20 then pass=true
       }
-      starts.toVector
-        .distinct
-        .sorted
+      (maxGrade,maxSinu,pass)
+    val l60=local(60,18); val l100=local(100,15)
+    DemandingMeasurements(wholeGrade,wholeSinu,l60._1,l60._2,l60._3,l100._1,l100._2,l100._3)
 
-  // Continuous, phase-independent soft handling exposure.
-  //
-  // For a fixed window W on a piecewise-linear elevation profile,
-  // descent(s)=z(s)-z(s+W) is piecewise linear between the same critical
-  // starts used by the hard wall/downhill extrema. Within each interval,
-  // the set where the 30 m descent meets a handling threshold is therefore
-  // an interval that can be solved exactly by linear interpolation.
-  //
-  // Return the union of ACTUAL ridden distance covered by qualifying windows,
-  // not old 0/10/20/... sample centers.
-  def sustainedDescentCoverageIntervals(points: Vector[Point], windowM: Double, minDescentPct: Double): Vector[(Double, Double)] =
-    val profile = elevationProfile(points)
-    val starts = criticalWindowStarts(profile, windowM)
-    if starts.isEmpty ||
-        windowM <= 0.0 ||
-        minDescentPct < 0.0
-    then
-      Vector.empty
-    else
-      def descentPctAt(startM: Double): Option[Double] =
-        for
-          a <-
-            elevationAt(profile, startM)
-          b <-
-            elevationAt(profile, startM + windowM)
-        yield
-          (
-            a -
-              b
-          ) /
-            windowM *
-            100.0
+  def parseGpx(path:Path,requireElevation:Boolean):Result[Gpx] =
+    boundary(s"parse GPX $path") {
+      val dbf=DocumentBuilderFactory.newInstance()
+      dbf.setNamespaceAware(true)
+      Try(dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl",true))
+      Try(dbf.setFeature("http://xml.org/sax/features/external-general-entities",false))
+      Try(dbf.setFeature("http://xml.org/sax/features/external-parameter-entities",false))
+      Try(dbf.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd",false))
+      val doc=dbf.newDocumentBuilder().parse(path.toFile)
+      val segments=doc.getElementsByTagNameNS("*","trkseg")
+      val nonEmptySegments=(0 until segments.getLength).flatMap { i =>
+        val seg=segments.item(i).asInstanceOf[org.w3c.dom.Element]
+        val pts=seg.getElementsByTagNameNS("*","trkpt")
+        if pts.getLength>0 then Some(seg) else None
+      }.toVector
+      if nonEmptySegments.size != 1 then
+        throw new IllegalArgumentException(
+          s"expected exactly one non-empty <trkseg>, found ${nonEmptySegments.size}"
+        )
+      val nodes=nonEmptySegments.head.getElementsByTagNameNS("*","trkpt")
+      val parsed=Vector.newBuilder[Point]
+      var issue:Option[String]=None
+      var i=0
 
-      val qualifyingStarts = mutable.ArrayBuffer[(Double, Double)]()
+      while i < nodes.getLength && issue.isEmpty do
+        val element=nodes.item(i).asInstanceOf[org.w3c.dom.Element]
+        val lat=element.getAttribute("lat").toDoubleOption
+        val lon=element.getAttribute("lon").toDoubleOption
+        val eles=element.getElementsByTagNameNS("*","ele")
+        val ele =
+          if eles.getLength == 0 then
+            if requireElevation then None else Some(0.0)
+          else eles.item(0).getTextContent.trim.toDoubleOption
 
-      // An exactly-threshold critical window still represents a real W-metre
-      // technical section even if the threshold is touched only at a kink.
-      starts.foreach { startM =>
-        descentPctAt(
-          startM
-        ).foreach { descentPct =>
-          if descentPct + 1e-12 >= minDescentPct
-          then
-            qualifyingStarts += ((
-              startM,
-              startM
-            ))
-        }
-      }
-      starts.sliding(2).foreach {
-        case Vector(leftM, rightM)
-            if rightM >
-              leftM + 1e-12 =>
-          (
-            descentPctAt(
-              leftM
-            ),
-            descentPctAt(rightM)
-          ) match
-            case (
-                  Some(leftPct),
-                  Some(rightPct)
-                ) =>
-              val leftQualifies =
-                leftPct + 1e-12 >= minDescentPct
-              val rightQualifies =
-                rightPct + 1e-12 >= minDescentPct
-              if leftQualifies &&
-                  rightQualifies
-              then
-                qualifyingStarts += ((
-                  leftM,
-                  rightM
-                ))
-              else if leftQualifies != rightQualifies
-              then
-                val delta = rightPct -
-                    leftPct
-                if math.abs(
-                    delta
-                  ) >
-                    1e-12
-                then
-                  val t =
-                    (
-                      minDescentPct -
-                        leftPct
-                    ) /
-                      delta
-                  val crossingM =
-                    math.max(
-                      leftM,
-                      math.min(
-                        rightM,
-                        leftM +
-                          (
-                            rightM -
-                              leftM
-                          ) *
-                            t
-                      )
-                    )
-                  if leftQualifies then
-                    qualifyingStarts += ((
-                      leftM,
-                      crossingM
-                    ))
-                  else
-                    qualifyingStarts += ((
-                      crossingM,
-                      rightM
-                    ))
-            case _ =>
-        case _ =>
-      }
-      val covered = qualifyingStarts.toVector
-          .map {
-            case (
-                  startM,
-                  endStartM
-                ) =>
-              (
-                startM,
-                endStartM +
-                  windowM
-              )
-          }
-          .sortBy(_._1)
-      covered.foldLeft(
-        Vector.empty[(Double, Double)]
-      ) {
-        case (
-              acc,
-              (startM, endM)
-            ) =>
-          acc.lastOption match
-            case Some((previousStartM, previousEndM))
-                if startM <= previousEndM + 1e-6 =>
-              acc.dropRight(
-                1
-              ) :+
-                (previousStartM, math.max(previousEndM, endM))
-            case _ =>
-              acc :+
-                (startM, endM)
-      }
+        (lat,lon,ele) match
+          case (Some(la),Some(lo),Some(el))
+              if la.isFinite && lo.isFinite && el.isFinite &&
+                la >= -90.0 && la <= 90.0 && lo >= -180.0 && lo <= 180.0 =>
+            parsed += Point(la,lo,el)
+          case _ =>
+            issue=Some(
+              if requireElevation && eles.getLength == 0 then s"missing <ele> at point $i"
+              else s"invalid/non-finite track point $i"
+            )
+        i += 1
 
-  def exactSustainedGradeWindows(points: Vector[Point], windowM: Double): Vector[(Double, Double)] =
-    val profile = elevationProfile(points)
-    criticalWindowStarts(
-      profile,
-      windowM
-    ).flatMap { startM =>
-      for
-        a <-
-          elevationAt(profile, startM)
-        b <-
-          elevationAt(profile, startM + windowM)
-      yield
-        (startM + windowM / 2.0, (b - a) / windowM * 100.0)
+      (issue,parsed.result())
+    }.flatMap {
+      case (Some(problem),_) => Left(s"$path: $problem")
+      case (None,points) if points.size < 2 => Left(s"$path: GPX must have >=2 track points")
+      case (None,points) =>
+        val name=nfc(path.getFileName.toString.replaceFirst("(?i)\\.gpx$",""))
+        Right(Gpx(name,points))
     }
 
-  def maxSustainedGradePct(points: Vector[Point], windowM: Double): Double =
-    exactSustainedGradeWindows(
-      points,
-      windowM
-    ).map(
-      _._2
-    ).foldLeft(
-      0.0
-    )(math.max)
-
-  def maxSustainedDescentPct(points: Vector[Point], windowM: Double): Double =
-    exactSustainedGradeWindows(
-      points,
-      windowM
-    ).map {
-      case (
-            _,
-            gradePct
-          ) =>
-        math.max(0.0, -gradePct)
-    }.foldLeft(
-      0.0
-    )(math.max)
-
-  private def elevationProfile(points: Vector[Point]): Vector[(Double, Double)] =
-    if points.isEmpty then Vector.empty
+  def gpxFiles(dir:Path):Result[Vector[Path]] =
+    if !Files.isDirectory(dir) then Right(Vector.empty)
     else
-      val cumulativeDistances =
-        points.sliding(2).scanLeft(0.0) {
-          case (cumulative, Vector(a, b)) =>
-            cumulative + distanceMeters(a, b)
-          case (cumulative, _) =>
-            cumulative
-        }
-      points.iterator.zip(cumulativeDistances).flatMap {
-        case (point, cumulativeM) =>
-          point.ele.map(elevation => (cumulativeM, elevation))
-      }.toVector
-
-  private def elevationAt(profile: Vector[(Double, Double)], distanceM: Double): Option[Double] =
-    if profile.isEmpty then None
-    else if distanceM <= profile.head._1 then Some(profile.head._2)
-    else if distanceM >= profile.last._1 then Some(profile.last._2)
-    else
-      profile.sliding(2).collectFirst {
-        case Vector((d0, z0), (d1, z1))
-            if distanceM >= d0 && distanceM <= d1 =>
-          val span = d1 - d0
-          if span <= 0.0 then z1
-          else
-            val t = (distanceM - d0) / span
-            z0 + (z1 - z0) * t
+      boundary(s"list $dir") {
+        val stream=Files.list(dir)
+        try
+          stream.iterator().asScala
+            .filter(p =>
+              Files.isRegularFile(p) &&
+                p.getFileName.toString.toLowerCase(Locale.ROOT).endsWith(".gpx")
+            )
+            .toVector
+            .sortBy(_.getFileName.toString)
+        finally stream.close()
       }
 
-  def sampleMatchDirection(output: Vector[Point], trail: Vector[Point], toleranceM: Double = 3.0): (Boolean, Boolean) =
-    if output.isEmpty || trail.size < 3 then (false, false)
-    else
-      // Use more than head/mid/end and require one compact occurrence.
-      // This prevents a later endpoint-area revisit of trail.head from being
-      // combined with mid/end samples from the earlier full trail ride.
-      val wantedSamples = math.min(7, trail.size)
-      val sampleIndices = (0 until wantedSamples)
-          .map { k =>
-            math.round(
-              k.toDouble *
-                (trail.size - 1).toDouble /
-                math.max(1, wantedSamples - 1).toDouble
-            ).toInt
-          }
-          .distinct
-          .toVector
-      val samples = sampleIndices.map(trail)
-      val positions = samples.map { sample =>
-          output.indices.filter { i =>
-            distanceMeters(output(i), sample) <= toleranceM
-          }.toVector
-        }
-      if positions.exists(_.isEmpty) then
-        (false, false)
+  def sequence[A](xs:Vector[Result[A]]):Result[Vector[A]] =
+    xs.foldLeft[Result[Vector[A]]](Right(Vector.empty)) {
+      case (Left(problem),_) => Left(problem)
+      case (Right(_),Left(problem)) => Left(problem)
+      case (Right(acc),Right(value)) => Right(acc :+ value)
+    }
+
+  def loadInputs(input:Path):Result[(Vector[Trail],Vector[Gpx],Vector[Gpx])] =
+    for
+      mandatoryPaths <- gpxFiles(input)
+      avoidPaths <- gpxFiles(input.resolve("avoid"))
+      realPaths <- gpxFiles(input.resolve("real"))
+      _ <-
+        if mandatoryPaths.size == 10 then Right(())
+        else Left(s"mandatory GPX count ${mandatoryPaths.size}, expected 10")
+      _ <-
+        if avoidPaths.size == 10 then Right(())
+        else Left(s"avoid GPX count ${avoidPaths.size}, expected 10")
+      _ <-
+        if realPaths.size == 4 then Right(())
+        else Left(s"real GPX count ${realPaths.size}, expected 4")
+      identities=mandatoryPaths.map(p => nfc(p.getFileName.toString.replaceFirst("(?i)\\.gpx$","")))
+      duplicates=identities.groupBy(identity).collect { case (name,items) if items.size > 1 => name }.toVector
+      _ <-
+        if duplicates.isEmpty then Right(())
+        else Left(s"duplicate mandatory identities: ${duplicates.mkString(", ")}")
+      mandatory <- sequence(mandatoryPaths.map(parseGpx(_,true)))
+      avoids <- sequence(avoidPaths.map(parseGpx(_,false)))
+      reals <- sequence(realPaths.map(parseGpx(_,true)))
+      trails=mandatory.map { g =>
+        Trail(g.name,g.points,demandingMeasurements(g.points),physics(g.points,0.010,Some(TrailDownhillMaxKph)))
+      }.sortBy(_.name)
+    yield (trails,avoids,reals)
+
+
+  def minPedalingSpeedMps: Double =
+    val diameterM=WheelInch*0.0254
+    val circumference=math.Pi*diameterM
+    circumference*(FrontTeeth/RearTeeth)*(MinimumCadence/60.0)
+
+  def riderPower(theta: Double, v: Double, crr: Double): Double =
+    val fg = TotalMass*G*math.sin(theta) + crr*TotalMass*G*math.cos(theta)
+    val fa = 0.5*Rho*CdA*v*v
+    math.max(0.0,(fg+fa)*v)/DrivetrainEfficiency
+
+  private case class SegmentRide(speedMps:Double, coasting:Boolean, riderPowerW:Double)
+
+  private def poweredSpeedForTarget(theta:Double, crr:Double):Double =
+    val wheelTarget=TargetPower*DrivetrainEfficiency
+    val sinTheta=math.sin(theta)
+    val cosTheta=math.cos(theta)
+    def requiredWheelPower(v:Double):Double =
+      val fg=TotalMass*G*sinTheta + crr*TotalMass*G*cosTheta
+      val fa=0.5*Rho*CdA*v*v
+      (fg+fa)*v
+    var lo=0.05
+    var hi=20.0
+    var k=0
+    while k<80 do
+      val mid=(lo+hi)/2.0
+      if requiredWheelPower(mid)<=wheelTarget then lo=mid else hi=mid
+      k+=1
+    lo
+
+  private def segmentRide(grade:Double, crr:Double, downhillCapKph:Option[Double]):SegmentRide =
+    val theta=math.atan(grade)
+    val sinTheta=math.sin(theta)
+    val cosTheta=math.cos(theta)
+    val capMps=downhillCapKph.map(_/3.6)
+    def applyCap(v:Double):Double=capMps.fold(v)(cap=>math.min(v,cap))
+
+    val coastDriveForce = -TotalMass*G*sinTheta - crr*TotalMass*G*cosTheta
+    if grade<0.0 && coastDriveForce>0.0 then
+      val terminal=math.sqrt((2.0*coastDriveForce)/(Rho*CdA))
+      val technicalTrail=downhillCapKph.nonEmpty
+      if technicalTrail || terminal >= (2.0/3.6) then
+        SegmentRide(applyCap(terminal),coasting=true,riderPowerW=0.0)
       else
-        val cumulative =
-          output.sliding(2).scanLeft(0.0) {
-            case (cumulativeM, Vector(a, b)) =>
-              cumulativeM + distanceMeters(a, b)
-            case (cumulativeM, _) =>
-              cumulativeM
-          }.toVector
-        val trailLengthM = pathLengthMeters(trail)
-        val minOccurrenceSpanM = math.max(5.0, trailLengthM * 0.55)
-        val maxOccurrenceSpanM = math.max(minOccurrenceSpanM + 20.0, trailLengthM * 1.65 + 50.0)
-
-        def occurrenceExists(increasing: Boolean): Boolean =
-          def ordered(next: Int, prev: Int): Boolean =
-            if increasing then next > prev
-            else next < prev
-
-          def search(sampleIdx: Int, prevPos: Int, firstPos: Int): Boolean =
-            if sampleIdx >= positions.size then
-              val spanM =
-                math.abs(
-                  cumulative(prevPos) -
-                    cumulative(firstPos)
-                )
-              spanM >= minOccurrenceSpanM &&
-                spanM <= maxOccurrenceSpanM
-            else
-              positions(sampleIdx).exists { pos =>
-                if !ordered(pos, prevPos) then
-                  false
-                else
-                  val partialSpanM =
-                    math.abs(
-                      cumulative(pos) -
-                        cumulative(firstPos)
-                    )
-                  partialSpanM <= maxOccurrenceSpanM &&
-                    search(sampleIdx + 1, pos, firstPos)
-              }
-          positions.head.exists { firstPos =>
-            search(sampleIdx = 1, prevPos = firstPos, firstPos = firstPos)
-          }
-        (occurrenceExists(increasing = true), occurrenceExists(increasing = false))
+        val easy=poweredSpeedForTarget(theta,crr)
+        val minPedal=minPedalingSpeedMps
+        if easy>=minPedal then SegmentRide(easy,false,TargetPower)
+        else SegmentRide(minPedal,false,math.max(TargetPower,riderPower(theta,minPedal,crr)))
+    else
+      val easy=poweredSpeedForTarget(theta,crr)
+      val minPedal=minPedalingSpeedMps
+      if easy>=minPedal then SegmentRide(applyCap(easy),false,TargetPower)
+      else SegmentRide(applyCap(minPedal),false,math.max(TargetPower,riderPower(theta,minPedal,crr)))
 
   /**
-   * Parameter intervals of route segment AB that lie inside the tolerance
-   * tube around a corridor polyline. Each corridor segment contributes an
-   * exact local-plane capsule (rectangle + endpoint circles); all intervals
-   * are unioned.
+   * Production rider physics intentionally uses ~30 m elevation chunks.
+   * Canonical /height is too noisy for 10 m instantaneous-power decisions;
+   * exact 30/100 m wall grades are still evaluated independently by wallMetrics.
+   * Downhill transfer chunks coast when gravity can sustain practical speed;
+   * mandatory technical GPX additionally uses the canonical 6 km/h descent cap.
    */
-  private def segmentInsideCorridorTubeIntervals(a: Point, b: Point, corridor: Vector[Point], radiusM: Double): Vector[(Double, Double)] =
-    if corridor.size < 2 || radiusM < 0.0 then Vector.empty
+  def physics(points: Vector[Point], crr: Double, downhillCapKph:Option[Double]=None): RiderMetrics =
+    if points.size<2 then RiderMetrics.Empty
     else
-      val lat0 = math.toRadians((a.lat + b.lat) / 2.0)
+      val raw=mutable.ArrayBuffer.empty[(Double,Double)]
+      var anchor=points.head
+      var accumulated=0.0
+      var i=1
+      while i<points.size do
+        val current=points(i)
+        accumulated += haversine(points(i-1),current)
+        val flush=accumulated>=PhysicsGradeWindowM || i==points.size-1
+        if flush && accumulated>0.0 then
+          raw += ((accumulated,current.ele-anchor.ele))
+          anchor=current
+          accumulated=0.0
+        i+=1
 
-      def xy(p: Point): (Double, Double) =
-        (math.toRadians(p.lon - a.lon) * EarthRadiusM * math.cos(lat0), math.toRadians(p.lat - a.lat) * EarthRadiusM)
+      if raw.size>=2 && raw.last._1<PhysicsGradeWindowM*0.5 then
+        val tail=raw.remove(raw.size-1)
+        val prev=raw.remove(raw.size-1)
+        raw += ((prev._1+tail._1,prev._2+tail._2))
 
-      val (rvx, rvy) = xy(b)
-      val routeVV = rvx * rvx + rvy * rvy
-      if routeVV <= 1e-12 then Vector.empty
+      raw.foldLeft(RiderMetrics.Empty) { case(acc,(distanceM,deltaM)) =>
+        val grade=if distanceM>0 then deltaM/distanceM else 0.0
+        val ride=segmentRide(grade,crr,downhillCapKph)
+        val sec=distanceM/math.max(ride.speedMps,0.05)
+        val p=if ride.coasting then 0.0 else ride.riderPowerW
+        val spike=if p>120.0 then math.pow((p-120.0)/40.0,2)*sec else 0.0
+        acc.concat(
+          RiderMetrics(
+            sec,
+            if p>120.0 then sec else 0.0,
+            if p>140.0 then sec else 0.0,
+            if p>160.0 then sec else 0.0,
+            Streak.constant(sec,p>120.0),
+            Streak.constant(sec,p>140.0),
+            Streak.constant(sec,p>180.0),
+            spike
+          )
+        )
+      }
+
+  def ascent(points: Vector[Point]): Double = points.sliding(2).map{case Vector(a,b)=>math.max(0.0,b.ele-a.ele);case _=>0.0}.sum
+
+  def maxPointGap(points:Vector[Point]):Double =
+    points.sliding(2).map {
+      case Vector(a,b) => haversine(a,b)
+      case _ => 0.0
+    }.foldLeft(0.0)(math.max)
+
+  def surfaceCrr(surfaceRaw: String, unpaved: Boolean = false): Double =
+    val s=surfaceRaw.trim.toLowerCase(Locale.ROOT).replace('-','_').replace(' ','_')
+    s match
+      case "paved_smooth" | "smooth_paved" => 0.006
+      case "paved" => 0.007
+      case "compacted" => 0.010
+      case "gravel" => 0.013
+      case "dirt" | "earth" => 0.016
+      case "mud" => 0.025
+      case "sand" => 0.030
+      case "impassable" => 0.050
+      case "unpaved" | "unknown_unpaved" => 0.014
+      case _ if unpaved => 0.014
+      case _ => 0.010
+
+
+  def lengthWeightedCrr(edges: Vector[EdgeAttr]): Double =
+    val usable=edges.filter(e => e.lengthM.isFinite && e.lengthM>0.0)
+    val total=usable.map(_.lengthM).sum
+    if total<=0 then 0.010 else usable.map(e=>e.lengthM*surfaceCrr(e.surface,e.unpaved)).sum/total
+
+  def wallMetrics(points: Vector[Point], rider: RiderMetrics): WallMetrics = WallMetrics(maxExactUphillGrade(points,30),maxExactUphillGrade(points,100),rider.streak180.localMax)
+
+  def cycleLaneKind(cycle:String):String =
+    Option(cycle).getOrElse("").trim.toLowerCase(Locale.ROOT) match
+      case "" | "no" | "none" | "unknown" | "false" => "none"
+      case other => other
+
+  def protectedCycle(cycle: String): Boolean =
+    !Set("none","shared").contains(cycleLaneKind(cycle))
+
+  case class EdgeRun(edges: Vector[EdgeAttr], begin: Int, end: Int)
+
+  def edgeRuns(edges: Vector[EdgeAttr], predicate: EdgeAttr => Boolean): Vector[EdgeRun] =
+    val out = mutable.ArrayBuffer.empty[EdgeRun]
+    var current = mutable.ArrayBuffer.empty[EdgeAttr]
+
+    def flush(): Unit =
+      if current.nonEmpty then
+        out += EdgeRun(current.toVector, current.head.begin, current.last.end)
+        current.clear()
+
+    edges.foreach { e =>
+      if e.lengthM > 0 && predicate(e) then
+        if current.nonEmpty && e.begin > current.last.end + 1 then flush()
+        current += e
       else
-        val routeMinX = math.min(0.0, rvx)
-        val routeMaxX = math.max(0.0, rvx)
-        val routeMinY = math.min(0.0, rvy)
-        val routeMaxY = math.max(0.0, rvy)
-        val raw = mutable.ArrayBuffer.empty[(Double, Double)]
+        flush()
+    }
+    flush()
+    out.toVector
 
-        def add(lo0: Double, hi0: Double): Unit =
-          val lo = math.max(0.0, math.min(1.0, math.min(lo0, hi0)))
-          val hi = math.max(0.0, math.min(1.0, math.max(lo0, hi0)))
-          if hi > lo + 1e-12 then raw += ((lo, hi))
+  def runGeometry(geometry: Vector[Point], run: EdgeRun): Vector[Point] =
+    if geometry.isEmpty || run.begin < 0 || run.end < run.begin || run.end >= geometry.size then Vector.empty
+    else geometry.slice(run.begin, run.end + 1)
 
-        def band(v0: Double, dv: Double, lo: Double, hi: Double): Option[(Double, Double)] =
-          if math.abs(dv) <= 1e-12 then
-            if v0 >= lo && v0 <= hi then Some((0.0, 1.0)) else None
-          else
-            val t1 = (lo - v0) / dv
-            val t2 = (hi - v0) / dv
-            val a = math.max(0.0, math.min(t1, t2))
-            val b = math.min(1.0, math.max(t1, t2))
-            if b > a + 1e-12 then Some((a, b)) else None
-
-        def addCircle(cx: Double, cy: Double): Unit =
-          val bb = -2.0 * (cx * rvx + cy * rvy)
-          val cc = cx * cx + cy * cy - radiusM * radiusM
-          val disc = bb * bb - 4.0 * routeVV * cc
-          if disc >= 0.0 then
-            val root = math.sqrt(math.max(0.0, disc))
-            add((-bb - root) / (2.0 * routeVV), (-bb + root) / (2.0 * routeVV))
-
-        var i = 0
-        while i + 1 < corridor.size do
-          val (cx, cy) = xy(corridor(i))
-          val (dx, dy) = xy(corridor(i + 1))
-          val svx = dx - cx
-          val svy = dy - cy
-          val segM = math.hypot(svx, svy)
-          val tubeMinX =
-            math.min(
-              cx,
-              dx
-            ) -
-              radiusM
-          val tubeMaxX =
-            math.max(
-              cx,
-              dx
-            ) +
-              radiusM
-          val tubeMinY =
-            math.min(
-              cy,
-              dy
-            ) -
-              radiusM
-          val tubeMaxY =
-            math.max(
-              cy,
-              dy
-            ) +
-              radiusM
-          val aabbCouldIntersect = routeMaxX >= tubeMinX &&
-              routeMinX <= tubeMaxX &&
-              routeMaxY >= tubeMinY &&
-              routeMinY <= tubeMaxY
-          if aabbCouldIntersect then
-            addCircle(cx, cy)
-            addCircle(dx, dy)
-            if segM > 1e-9 then
-              val ux = svx / segM
-              val uy = svy / segM
-              val nx = -uy
-              val ny = ux
-              val along0 = -(cx * ux + cy * uy)
-              val alongDv = rvx * ux + rvy * uy
-              val lateral0 = -(cx * nx + cy * ny)
-              val lateralDv = rvx * nx + rvy * ny
-              (
-                band(
-                  along0,
-                  alongDv,
-                  0.0,
-                  segM
-                ),
-                band(lateral0, lateralDv, -radiusM, radiusM)
-              ) match
-                case (
-                      Some((aLo, aHi)),
-                      Some((bLo, bHi))
-                    ) =>
-                  val intersectionLo =
-                    math.max(
-                      aLo,
-                      bLo
-                    )
-                  val intersectionHi =
-                    math.min(aHi, bHi)
-                  if intersectionHi > intersectionLo + 1e-12 then
-                    add(
-                      intersectionLo,
-                      intersectionHi
-                    )
-                case _ =>
-          i += 1
-        val sorted = raw.toVector.sortBy(_._1)
-        if sorted.isEmpty then Vector.empty
-        else
-          val merged = Vector.newBuilder[(Double, Double)]
-          var lo = sorted.head._1
-          var hi = sorted.head._2
-          var j = 1
-          while j < sorted.size do
-            val (nextLo, nextHi) = sorted(j)
-            if nextLo <= hi + 1e-10 then hi = math.max(hi, nextHi)
-            else
-              merged += ((lo, hi))
-              lo = nextLo
-              hi = nextHi
-            j += 1
-          merged += ((lo, hi))
-          merged.result()
-
-  private def interpolatePoint(a: Point, b: Point, t0: Double): Point =
-    val t = math.max(0.0, math.min(1.0, t0))
-    Point(a.lat + (b.lat - a.lat) * t, a.lon + (b.lon - a.lon) * t)
+  def modeledRunSeconds(geometry: Vector[Point], run: EdgeRun): Double =
+    val points = runGeometry(geometry, run)
+    if points.size < 2 then Double.PositiveInfinity
+    else physics(points, lengthWeightedCrr(run.edges)).duration
 
   /**
-   * Signed nearest-corridor lateral distance. Used only to distinguish a
-   * simple side-to-side crossing from travel mainly along the corridor.
-   */
-  private def signedLateralToPolylineMeters(p: Point, corridor: Vector[Point]): Option[Double] =
-    if corridor.size < 2 then None
+    * Finite unprotected-primary exposure is a rider-quality cost, not a hard
+    * graph deletion. It remains fully measured by roadStress, so calmer
+    * alternatives dominate it when otherwise competitive. Motorway/trunk,
+    * steps/ferry/rail/impassable remain hard-invalid; an unmodelable primary
+    * duration still fails closed.
+    */
+  def unprotectedPrimaryRuns(edges: Vector[EdgeAttr], geometry: Vector[Point]): Vector[(EdgeRun,Double)] =
+    edgeRuns(
+      edges,
+      e => e.roadClass.equalsIgnoreCase("primary") && !protectedCycle(e.cycleLane)
+    ).map(run => run -> modeledRunSeconds(geometry, run))
+
+  def safetyReasons(edges: Vector[EdgeAttr], geometry: Vector[Point]): Vector[String] =
+    val reasons=mutable.ArrayBuffer.empty[String]
+    edges.foreach { e =>
+      val rc=e.roadClass.toLowerCase(Locale.ROOT); val use=e.use.toLowerCase(Locale.ROOT); val surf=e.surface.toLowerCase(Locale.ROOT)
+      if !e.lengthM.isFinite || e.lengthM < 0.0 then reasons += "invalid-edge-length"
+      else if e.lengthM > 0 then
+        if rc.isEmpty then reasons += "missing-road-class"
+        if use.isEmpty then reasons += "missing-use"
+        if surf.isEmpty then reasons += "missing-surface"
+        if e.begin < 0 || e.end < e.begin || e.begin >= geometry.size || e.end >= geometry.size then reasons += "missing-edge-correspondence"
+        if rc=="motorway" then reasons += "motorway"
+        if rc=="trunk" then reasons += "trunk"
+        if Set("steps","ferry","rail-ferry","rail_ferry","rail").contains(use) then reasons += use
+        if surf=="impassable" then reasons += "impassable"
+    }
+
+    // Unknown modeled duration still fails closed because the road exposure
+    // cannot be established.  A finite >=120 s run is evidence only in FIX31.
+    unprotectedPrimaryRuns(edges,geometry).foreach { case(_,sec) =>
+      if !sec.isFinite then reasons += "primary-unknown-time"
+    }
+
+    reasons.toVector.distinct
+
+  def modeledEdgeSeconds(
+      edges: Vector[EdgeAttr],
+      geometry: Vector[Point],
+      predicate: EdgeAttr => Boolean
+  ): Double =
+    edgeRuns(edges, predicate).map(modeledRunSeconds(geometry, _)).sum
+
+  def roadStress(edges: Vector[EdgeAttr], geometry: Vector[Point]): Double =
+    modeledEdgeSeconds(edges, geometry, e => Set("motorway", "trunk").contains(e.roadClass.toLowerCase(Locale.ROOT))) +
+      modeledEdgeSeconds(edges, geometry, e => e.roadClass.equalsIgnoreCase("primary") && cycleLaneKind(e.cycleLane)=="shared") +
+      modeledEdgeSeconds(edges, geometry, e => e.roadClass.equalsIgnoreCase("primary") && !protectedCycle(e.cycleLane) && cycleLaneKind(e.cycleLane)!="shared") +
+      modeledEdgeSeconds(edges, geometry, e => e.roadClass.equalsIgnoreCase("secondary") && cycleLaneKind(e.cycleLane)=="shared") +
+      modeledEdgeSeconds(edges, geometry, e => e.roadClass.equalsIgnoreCase("secondary") && !protectedCycle(e.cycleLane) && cycleLaneKind(e.cycleLane)!="shared")
+
+
+  case class Projection(lat0: Double, lon0: Double):
+    private val cos0=math.cos(math.toRadians(lat0))
+    def xy(p: Point): XY = XY(EarthR*math.toRadians(p.lon-lon0)*cos0,EarthR*math.toRadians(p.lat-lat0))
+
+  def dot(a:XY,b:XY)=a.x*b.x+a.y*b.y
+  def sub(a:XY,b:XY)=XY(a.x-b.x,a.y-b.y)
+  def add(a:XY,b:XY)=XY(a.x+b.x,a.y+b.y)
+  def mul(a:XY,t:Double)=XY(a.x*t,a.y*t)
+  def norm2(a:XY)=dot(a,a)
+  def dist(a:XY,b:XY)=math.hypot(a.x-b.x,a.y-b.y)
+
+  def segmentClosestParam(p: XY, a: XY, b: XY): Double =
+    val ab=sub(b,a); val d=norm2(ab)
+    if d<=1e-12 then 0.0 else math.max(0.0,math.min(1.0,dot(sub(p,a),ab)/d))
+
+  def pointSegDistance(p:XY,a:XY,b:XY):Double =
+    val t=segmentClosestParam(p,a,b); dist(p,add(a,mul(sub(b,a),t)))
+
+  def solveCircleInterval(a:XY,b:XY,c:XY,r:Double): Option[(Double,Double)] =
+    val d=sub(b,a); val f=sub(a,c); val A=norm2(d)
+    if A<=1e-12 then if dist(a,c)<=r then Some((0,1)) else None
     else
-      val lat0 = math.toRadians(p.lat)
+      val B=2*dot(f,d); val C=norm2(f)-r*r; val disc=B*B-4*A*C
+      if disc<0 then None
+      else
+        val q=math.sqrt(math.max(0,disc)); val t1=(-B-q)/(2*A); val t2=(-B+q)/(2*A)
+        val lo=math.max(0.0,math.min(t1,t2)); val hi=math.min(1.0,math.max(t1,t2))
+        if lo<=hi then Some((lo,hi)) else None
 
-      def xy(q: Point): (Double, Double) =
-        (math.toRadians(q.lon - p.lon) * EarthRadiusM * math.cos(lat0), math.toRadians(q.lat - p.lat) * EarthRadiusM)
+  def clipSegmentToCapsule(a:XY,b:XY,c:XY,d:XY,r:Double): Vector[(Double,Double)] =
+    val candidates=mutable.ArrayBuffer.empty[(Double,Double)]
+    solveCircleInterval(a,b,c,r).foreach(candidates += _)
+    solveCircleInterval(a,b,d,r).foreach(candidates += _)
+    val ab=sub(b,a); val cd=sub(d,c); val cd2=norm2(cd)
+    if cd2>1e-12 && norm2(ab)>1e-12 then
+      val len = math.sqrt(cd2); val ux = cd.x / len; val uy = cd.y / len; val nx = -uy; val ny = ux
+      val da=dot(sub(a,c),XY(nx,ny)); val db=dot(ab,XY(nx,ny))
+      val ts=mutable.ArrayBuffer(0.0,1.0)
+      if math.abs(db)>1e-12 then
+        ts += (( r-da)/db); ts += ((-r-da)/db)
+      val projA=dot(sub(a,c),XY(ux,uy)); val projB=dot(ab,XY(ux,uy))
+      if math.abs(projB)>1e-12 then
+        ts += ((0-projA)/projB); ts += ((len-projA)/projB)
+      val sorted=ts.filter(t=>t>=0&&t<=1).distinct.sorted
+      sorted.sliding(2).foreach { pair =>
+        if pair.size == 2 then
+          val x = pair(0)
+          val y = pair(1)
+          if y >= x then
+            val m = (x + y) / 2.0
+            val p = add(a, mul(ab, m))
+            val pr = dot(sub(p, c), XY(ux, uy))
+            val perp = math.abs(dot(sub(p, c), XY(nx, ny)))
+            if pr >= 0.0 && pr <= len && perp <= r then
+              candidates += ((x, y))
+      }
+    mergeIntervals(candidates.toVector)
 
-      val (best, signed) =
-        corridor.sliding(2).foldLeft((Double.PositiveInfinity, 0.0)) {
-          case ((best, signed), Vector(a, b)) =>
-            val (ax, ay) = xy(a)
-            val (bx, by) = xy(b)
-            val vx = bx - ax
-            val vy = by - ay
-            val vv = vx * vx + vy * vy
-            if vv <= 1e-12 then
-              (best, signed)
-            else
-              val t = math.max(0.0, math.min(1.0, -(ax * vx + ay * vy) / vv))
-              val qx = ax + t * vx
-              val qy = ay + t * vy
-              val lateral = math.hypot(qx, qy)
-              if lateral < best then (lateral, (vy * qx - vx * qy) / math.sqrt(vv))
-              else (best, signed)
-          case (state, _) =>
-            state
-        }
-      if best.isInfinite then None else Some(signed)
+  def mergeIntervals(in: Vector[(Double,Double)], eps:Double=1e-9): Vector[(Double,Double)] =
+    if in.isEmpty then Vector.empty
+    else
+      val s=in.map{case(a,b)=>(math.min(a,b),math.max(a,b))}.sortBy(_._1)
+      val out=mutable.ArrayBuffer.empty[(Double,Double)]; var cur=s.head
+      s.tail.foreach { x =>
+        if x._1<=cur._2+eps then cur=(cur._1,math.max(cur._2,x._2))
+        else {out+=cur;cur=x}
+      }
+      out+=cur; out.toVector
+
+  case class PolylineProjection(alongM: Double, lateralM: Double, signedLateralM: Double)
+
+  def projectToPolyline(p: Point, line: Vector[Point], projection: Projection): Option[PolylineProjection] =
+    if line.size < 2 then None
+    else
+      val pxy=projection.xy(p)
+      val lxy=line.map(projection.xy)
+      val lcum=cumulative(line)
+      var bestDist=Double.PositiveInfinity
+      var bestAlong=0.0
+      var bestSigned=0.0
+      var j=0
+      while j+1<lxy.size do
+        val a=lxy(j); val b=lxy(j+1); val ab=sub(b,a); val ab2=norm2(ab)
+        if ab2>1e-12 then
+          val t=segmentClosestParam(pxy,a,b)
+          val q=add(a,mul(ab,t))
+          val dx=pxy.x-q.x; val dy=pxy.y-q.y
+          val d=math.hypot(dx,dy)
+          val segLen=math.sqrt(ab2)
+          val signed=(ab.x*dy-ab.y*dx)/segLen
+          val along=lcum(j)+t*(lcum(j+1)-lcum(j))
+          if d<bestDist-1e-9 || (math.abs(d-bestDist)<=1e-9 && along<bestAlong) then
+            bestDist=d; bestAlong=along; bestSigned=signed
+        j+=1
+      if bestDist.isFinite then Some(PolylineProjection(bestAlong,bestDist,bestSigned)) else None
+
+  case class CoTravelChunk(meters: Double, midpoint: Point)
+
+  def interpolatePoint(a:Point,b:Point,t0:Double):Point =
+    val t=math.max(0.0,math.min(1.0,t0))
+    Point(
+      a.lat+t*(b.lat-a.lat),
+      a.lon+t*(b.lon-a.lon),
+      a.ele+t*(b.ele-a.ele)
+    )
+
+  def geoBounds(points: Vector[Point]): GeoBounds =
+    require(points.nonEmpty, "cannot build bounds for empty geometry")
+    GeoBounds(
+      points.map(_.lat).min,
+      points.map(_.lat).max,
+      points.map(_.lon).min,
+      points.map(_.lon).max
+    )
 
   /**
-   * Hard /avoid co-travel measurement.
-   *
-   * Every route segment is clipped against the corridor tube, so entering or
-   * leaving through the 12 m boundary no longer discards the in-tube part.
-   * Reverse travel counts. A chord that simply crosses from one side to the
-   * other is ignored when its across-corridor sweep is at least its progress
-   * along the corridor.
-   */
-  private case class CoTravelChunk(meters: Double, midpoint: Point)
+    * Conservative cheap rejection before the exact O(routeSegments*corridorSegments)
+    * tube matcher.  A false positive is fine; a false negative is not.
+    * Dateline-spanning geometry deliberately bypasses longitude rejection.
+    */
+  def boundsCouldBeWithinTolerance(a: GeoBounds, b: GeoBounds, toleranceM: Double): Boolean =
+    val latPadDeg=math.toDegrees(math.max(0.0,toleranceM)/EarthR)
+    val latOverlap=a.maxLat >= b.minLat-latPadDeg && a.minLat <= b.maxLat+latPadDeg
+    if !latOverlap then false
+    else
+      val aSpan=a.maxLon-a.minLon
+      val bSpan=b.maxLon-b.minLon
+      if aSpan>180.0 || bSpan>180.0 then true
+      else
+        val maxAbsLat=math.min(89.999999,Vector(a.minLat.abs,a.maxLat.abs,b.minLat.abs,b.maxLat.abs).max+latPadDeg)
+        val cosLat=math.cos(math.toRadians(maxAbsLat))
+        val lonPadDeg=
+          if cosLat<=1e-9 then 180.0
+          else math.toDegrees(math.max(0.0,toleranceM)/(EarthR*cosLat))
+        a.maxLon >= b.minLon-lonPadDeg && a.minLon <= b.maxLon+lonPadDeg
+
+  // Protected-corridor production geometry uses independently checked exact
+  // capsule clipping. Historical OLD differential code has been removed after
+  // repeated canonical regressions; the synthetic empty-intersection regression
+  // remains in the contract tests below.
+  /**
+    * Exact continuous tube clipping used by production corridor protection.
+    *
+    * The metric plane is rebuilt for every connector segment.  This keeps the
+    * equirectangular approximation local (tens of metres), while each protected
+    * segment contributes an exact capsule: finite-width rectangle + endpoint
+    * circles.  Capsule intervals are UNIONED; rectangle constraints are
+    * INTERSECTED and an empty intersection stays empty.
+    *
+    * That last property matters: the historical matcher normalized `(lo, hi)`
+    * inside a shared `add` helper.  When two rectangle bands were disjoint and
+    * produced `lo > hi`, normalizing them silently manufactured a false interval.
+    */
+  def exactTubeIntervalsForSegment(
+      a: Point,
+      b: Point,
+      protectedLine: Vector[Point],
+      radiusM: Double
+  ): Vector[(Double,Double)] =
+    if protectedLine.size < 2 || radiusM < 0.0 then Vector.empty
+    else
+      val projection = Projection(
+        (a.lat + b.lat) / 2.0,
+        (a.lon + b.lon) / 2.0
+      )
+      val routeA = projection.xy(a)
+      val routeB = projection.xy(b)
+      val routeMinX = math.min(routeA.x, routeB.x)
+      val routeMaxX = math.max(routeA.x, routeB.x)
+      val routeMinY = math.min(routeA.y, routeB.y)
+      val routeMaxY = math.max(routeA.y, routeB.y)
+      val raw = mutable.ArrayBuffer.empty[(Double,Double)]
+
+      var i = 0
+      while i + 1 < protectedLine.size do
+        val corridorA = projection.xy(protectedLine(i))
+        val corridorB = projection.xy(protectedLine(i + 1))
+        val couldIntersect =
+          routeMaxX >= math.min(corridorA.x, corridorB.x) - radiusM &&
+          routeMinX <= math.max(corridorA.x, corridorB.x) + radiusM &&
+          routeMaxY >= math.min(corridorA.y, corridorB.y) - radiusM &&
+          routeMinY <= math.max(corridorA.y, corridorB.y) + radiusM
+        if couldIntersect then
+          raw ++= clipSegmentToCapsule(routeA, routeB, corridorA, corridorB, radiusM)
+        i += 1
+
+      mergeIntervals(raw.toVector, 1e-10)
+
+  private def localPolylineProjection(p: Point, line: Vector[Point]): Option[PolylineProjection] =
+    projectToPolyline(p, line, Projection(p.lat, p.lon))
 
   /**
-   * Qualifying pieces of route that actually co-travel with the corridor.
-   * This is the single geometric definition used both by the hard audit and
-   * by route-derived Valhalla blockers.
-   */
-  private def coTravelChunks(
-      route: Vector[Point],
-      corridor: Vector[Point],
-      toleranceM: Double,
-      minAlongFraction: Double
+    * Qualifying pieces of connector that genuinely co-travel with a protected
+    * corridor.  Being inside the 12 m tube is necessary but not sufficient:
+    * the clipped piece must also progress mainly ALONG the corridor.  This
+    * excludes perpendicular/oblique crossings while preserving reverse travel.
+    */
+  def coTravelChunks(
+      connector: Vector[Point],
+      protectedLine: Vector[Point],
+      tolerance: Double,
+      minAlongFraction: Double = 0.55
   ): Vector[CoTravelChunk] =
-    if route.size < 2 || corridor.size < 2 then
-      Vector.empty
+    if connector.size < 2 || protectedLine.size < 2 || tolerance < 0.0 then Vector.empty
     else
       val out = Vector.newBuilder[CoTravelChunk]
       var i = 0
-      while i + 1 < route.size do
-        val a = route(i)
-        val b = route(i + 1)
-        val segmentM = distanceMeters(a, b)
-        if segmentM > 0.0 then
-          segmentInsideCorridorTubeIntervals(
-            a,
-            b,
-            corridor,
-            toleranceM
-          ).foreach {
-            case (
-                  lo,
-                  hi
-                ) =>
-              val clippedM = segmentM *
-                  (
-                    hi -
-                      lo
-                  )
-              if clippedM > 1e-9 then
-                val clippedA = interpolatePoint(a, b, lo)
-                val clippedB = interpolatePoint(a, b, hi)
-                (
-                  projectToPolyline(
-                    clippedA,
-                    corridor
-                  ),
-                  projectToPolyline(clippedB, corridor)
-                ) match
-                  case (
-                        Some(pa),
-                        Some(pb)
-                      ) =>
-                    val alongDeltaM =
-                      math.abs(
-                        pb.alongM -
-                          pa.alongM
-                      )
-                    val alongFraction = alongDeltaM /
-                        clippedM
-                    val plausible =
-                      alongDeltaM <= clippedM * 1.8 +
-                          5.0
-                    val crossingLike =
-                      (
-                        signedLateralToPolylineMeters(
-                          clippedA,
-                          corridor
-                        ),
-                        signedLateralToPolylineMeters(clippedB, corridor)
-                      ) match
-                        case (
-                              Some(sa),
-                              Some(sb)
-                            ) =>
-                          sa *
-                              sb <
-                            0.0 &&
-                            math.abs(
-                              sb -
-                                sa
-                            ) >= alongDeltaM -
-                                1e-6
-                        case _ =>
-                          false
-                    if !crossingLike &&
-                        alongFraction >= minAlongFraction &&
-                        plausible
-                    then
-                      out +=
-                        CoTravelChunk(
-                          meters = clippedM,
-                          midpoint =
-                            interpolatePoint(
-                              a,
-                              b,
-                              (
-                                lo +
-                                  hi
-                              ) /
-                                2.0
-                            )
-                        )
-                  case _ =>
+      while i + 1 < connector.size do
+        val a = connector(i)
+        val b = connector(i + 1)
+        val segmentM = haversine(a, b)
+        if segmentM > 1e-9 then
+          exactTubeIntervalsForSegment(a, b, protectedLine, tolerance).foreach { case (lo, hi) =>
+            // exactTubeIntervalsForSegment guarantees hi > lo.
+            val clippedM = segmentM * (hi - lo)
+            if clippedM > 1e-9 then
+              val clippedA = interpolatePoint(a, b, lo)
+              val clippedB = interpolatePoint(a, b, hi)
+              (localPolylineProjection(clippedA, protectedLine), localPolylineProjection(clippedB, protectedLine)) match
+                case (Some(pa), Some(pb)) =>
+                  val alongDeltaM = math.abs(pb.alongM - pa.alongM)
+                  val alongFraction = alongDeltaM / clippedM
+                  // Guard against projection jumping to a distant nearby branch.
+                  val plausible = alongDeltaM <= clippedM * 1.8 + 5.0
+                  val crossingLike =
+                    pa.signedLateralM * pb.signedLateralM < 0.0 &&
+                    math.abs(pb.signedLateralM - pa.signedLateralM) >= alongDeltaM - 1e-6
+                  if !crossingLike && alongFraction >= minAlongFraction && plausible then
+                    out += CoTravelChunk(
+                      clippedM,
+                      interpolatePoint(a, b, (lo + hi) / 2.0)
+                    )
+                case _ => ()
           }
-        i +=
-          1
+        i += 1
       out.result()
 
-  def coTravelOverlapMeters(route: Vector[Point], corridor: Vector[Point], toleranceM: Double, minAlongFraction: Double = 0.55): Double =
-    coTravelChunks(
-      route,
-      corridor,
-      toleranceM,
-      minAlongFraction
-    ).map(
-      _.meters
-    ).sum
+  def continuousCoTravel(
+      connector: Vector[Point],
+      protectedLine: Vector[Point],
+      tolerance: Double,
+      minAlongFraction: Double = 0.55
+  ): Double =
+    coTravelChunks(connector, protectedLine, tolerance, minAlongFraction).map(_.meters).sum
 
-  /**
-   * Pick a Valhalla avoid_location from the actual route that violated a
-   * strict /avoid corridor.
-   *
-   * No junction topology is inferred from raw coordinate equality and there
-   * is no fixed endpoint-clearance radius. Among the pieces already accepted
-   * by the hard co-travel detector, choose the one deepest inside this
-   * connector: maximum distance from its nearer connector endpoint.
-   */
   def coTravelBlockPoint(
-      route: Vector[Point],
-      corridor: Vector[Point],
-      toleranceM: Double,
+      connector: Vector[Point],
+      protectedLine: Vector[Point],
+      tolerance: Double,
       from: Point,
       to: Point,
       minAlongFraction: Double = 0.55
   ): Option[Point] =
-    val chunks = coTravelChunks(route, corridor, toleranceM, minAlongFraction)
-    chunks
+    coTravelChunks(connector, protectedLine, tolerance, minAlongFraction)
       .maxByOption { chunk =>
-        math.min(
-          distanceMeters(
-            chunk.midpoint,
-            from
-          ),
-          distanceMeters(chunk.midpoint, to)
-        )
+        math.min(haversine(chunk.midpoint, from), haversine(chunk.midpoint, to))
       }
       .map(_.midpoint)
 
-  def appendExactDistinctPoints(existing: Vector[Point], additions: Vector[Point]): Vector[Point] =
-    additions.foldLeft(
-      existing
-    ) { (acc, p) =>
-      if acc.exists(q => q.lat == p.lat && q.lon == p.lon) then acc
-      else acc :+ p
+  def appendExactDistinctPoints(existing:Vector[Point], additions:Vector[Point]):Vector[Point] =
+    additions.foldLeft(existing) { (acc,p) =>
+      if acc.exists(q => q.lat==p.lat && q.lon==p.lon) then acc else acc :+ p
     }
 
-  def appendDistinct(a: Vector[Point], b: Vector[Point], thresholdM: Double = 3.0): Vector[Point] =
-    if a.isEmpty then b
-    else if b.isEmpty then a
-    else if distanceMeters(a.last, b.head) <= thresholdM then a ++ b.tail
-    else a ++ b
+  def removeConsecutiveDuplicates(points: Vector[Point]): Vector[Point] =
+    points.foldLeft(Vector.empty[Point]) { (acc,p) => if acc.lastOption.exists(q=>q.lat==p.lat && q.lon==p.lon) then acc else acc :+ p }
 
-object Format:
-  def duration(seconds: Double): String =
-    val total = math.max(0L, math.round(seconds))
-    val h = total / 3600
-    val m = (total % 3600) / 60
-    val s = total % 60
-    if h > 0 then f"$h%d:${m}%02d:${s}%02d"
-    else f"$m%d:${s}%02d"
+  def headingNoise(points: Vector[Point]): Double =
+    val p=removeConsecutiveDuplicates(points)
+    if p.size<3 then 0.0
+    else
+      val hs=p.sliding(2).map { case Vector(a,b) => math.atan2(math.toRadians(b.lon-a.lon)*math.cos(math.toRadians((a.lat+b.lat)/2)), math.toRadians(b.lat-a.lat)); case _=>0.0 }.toVector
+      hs.sliding(2).map { case Vector(a,b) =>
+        var d=b-a; while d>math.Pi do d-=2*math.Pi; while d< -math.Pi do d+=2*math.Pi; math.abs(d)
+        case _=>0.0
+      }.sum
 
-  def point(p: Point): String =
-    f"${p.lat}%.6f,${p.lon}%.6f"
+  case class ProjectedSample(s: Double, ele: Double, distance: Double)
 
-  def finite(x: Double): Boolean =
-    !x.isNaN && !x.isInfinite
-
-class Valhalla(baseUrl: String, profile: RoutingProfile, elevationSampleM: Double):
-  private val http = HttpClient.newBuilder().build()
-  private val heightShapeMemory =
-    mutable.HashMap.empty[
-      Vector[(Long, Long)],
-      Vector[Point]
-    ]
-
-  private def coordinateBits(point: Point): (Long, Long) =
-    (
-      java.lang.Double.doubleToLongBits(
-        point.lat
-      ),
-      java.lang.Double.doubleToLongBits(point.lon)
-    )
-
-  def statusFingerprint(): String =
-    try
-      val body = get("/status")
-      val json = ujson.read(body)
-      val obj = json.obj
-      val version = obj.get("version").map(_.str).getOrElse("unknown")
-      val tiles = obj.get("tileset_last_modified") match
-          case Some(ujson.Num(x)) => x.toLong.toString
-          case Some(v)            => v.toString
-          case None               => "unknown"
-      s"valhalla=$version;tiles=$tiles"
-    catch
-      case _: Exception => "valhalla=unknown;tiles=unknown"
-
-  def route(
-      from: Point,
-      to: Point,
-      avoidLocations: Vector[Point] = Vector.empty,
-      speedOverrideKph: Option[Double] = None,
-      useHillsOverride: Option[Double] = None,
-      useRoadsOverride: Option[Double] = None
-  ): Either[String, RouteResult] =
-    try
-      val payload = ujson.Obj(
-        "locations" -> ujson.Arr(
-          ujson.Obj("lat" -> from.lat, "lon" -> from.lon),
-          ujson.Obj("lat" -> to.lat, "lon" -> to.lon)
-        ),
-        "costing" -> "bicycle",
-        "costing_options" -> ujson.Obj(
-          "bicycle" -> ujson.Obj(
-            "bicycle_type" -> canonicalBikeType(profile.bicycleType),
-            "cycling_speed" -> speedOverrideKph.getOrElse(profile.speedKph),
-            "use_hills" -> useHillsOverride.getOrElse(profile.useHills),
-            "use_roads" -> useRoadsOverride.getOrElse(profile.useRoads),
-            "avoid_bad_surfaces" -> profile.avoidBadSurfaces
-          )
-        ),
-        "directions_type" -> "none",
-        "units" -> "kilometers",
-        "shape_format" -> "polyline6"
-      )
-      if avoidLocations.nonEmpty then
-        payload.obj("avoid_locations") = ujson.Arr(
-          avoidLocations.map { p =>
-            ujson.Obj("lat" -> p.lat, "lon" -> p.lon)
-          }*
-        )
-      val body = post("/route", ujson.write(payload))
-      val json = ujson.read(body)
-      val trip = json.obj.getOrElse("trip", sys.error(s"Valhalla response has no trip: $body"))
-      val summary = trip("summary")
-      val seconds = summary("time").num
-      val lengthKm = summary("length").num
-      val legs = trip("legs").arr
-      val routePoints = legs.foldLeft(Vector.empty[Point]) { (acc, leg) =>
-        val decoded = decodePolyline6(leg("shape").str)
-        Geometry.appendDistinct(acc, decoded)
-      }
-      require(routePoints.nonEmpty, "Valhalla returned an empty route shape")
-      val dense = Geometry.resample(routePoints, elevationSampleM)
-      val elevated = withElevation(dense)
-      Right(
-        RouteResult(
-          from = from,
-          to = to,
-          points = elevated,
-          rawValhallaPoints = routePoints,
-          seconds = seconds,
-          lengthKm = lengthKm
-        )
-      )
-    catch
-      case e: Exception =>
-        val diagnostics =
-          try
-            val a = locateSummary(from)
-            val b = locateSummary(to)
-            s"\n  from ${Format.point(from)}: $a\n  to   ${Format.point(to)}: $b"
-          catch
-            case _: Exception => ""
-        Left(Option(e.getMessage).getOrElse(e.toString) + diagnostics)
-
-  private def parseTraceEdges(json: ujson.Value): Vector[TraceEdge] =
-    val edges = json.obj
-        .get("edges")
-        .map(_.arr.toVector)
-        .getOrElse(Vector.empty)
-    edges.map { edge =>
-      val obj = edge.obj
-
-      def string(name: String, default: String = "unknown"): String =
-        obj.get(name) match
-          case Some(ujson.Str(x)) => x
-          case Some(v)            => v.toString
-          case None               => default
-
-      def number(name: String): Option[Double] =
-        obj.get(name) match
-          case Some(ujson.Num(x)) => Some(x)
-          case _                  => None
-
-      def bool(name: String): Boolean =
-        obj.get(name) match
-          case Some(ujson.Bool(x)) => x
-          case _                   => false
-      TraceEdge(
-        lengthKm = number("length").getOrElse(0.0),
-        surface = string("surface"),
-        use = string("use"),
-        roadClass = string("road_class"),
-        unpaved = bool("unpaved"),
-        cycleLane = string("cycle_lane", "none"),
-        beginShapeIndex = number("begin_shape_index")
-            .map(
-              _.toInt
-            ),
-        endShapeIndex = number("end_shape_index")
-            .map(_.toInt)
-      )
+  def monotonicProject(samples: Vector[Point], reference: Vector[Point]): Vector[ProjectedSample] =
+    val ref=removeConsecutiveDuplicates(reference); val rcum=cumulative(ref); val lat0=ref.map(_.lat).sum/ref.size; val lon0=ref.map(_.lon).sum/ref.size; val pr=Projection(lat0,lon0); val rxy=ref.map(pr.xy)
+    var prevS=0.0
+    val out=mutable.ArrayBuffer.empty[ProjectedSample]
+    samples.foreach { p =>
+      val xy=pr.xy(p); var bestD=Double.PositiveInfinity; var bestS=prevS
+      var j=0
+      while j+1<rxy.size do
+        val segStart=rcum(j); val segEnd=rcum(j+1)
+        if segEnd+1e-9>=prevS then
+          var t=segmentClosestParam(xy,rxy(j),rxy(j+1)); val len=segEnd-segStart
+          if len>0 && segStart+t*len<prevS then t=math.max(0.0,math.min(1.0,(prevS-segStart)/len))
+          val q=add(rxy(j),mul(sub(rxy(j+1),rxy(j)),t)); val d=dist(xy,q); val s=segStart+t*len
+          if d<bestD-1e-9 || (math.abs(d-bestD)<1e-9 && s<bestS) then {bestD=d;bestS=s}
+        j+=1
+      if bestD<=15.0 then {out += ProjectedSample(bestS,p.ele,bestD); prevS=bestS}
     }
+    out.toVector
 
-  private def traceAttributesRequest(
-      points: Vector[Point],
-      shapeMatch: String,
-      speedKph: Double = 20.0,
-      useHills: Double = 0.70,
-      useRoads: Double = 0.35
-  ): TraceAttributesDetailed =
-    val payload = ujson.Obj(
-      "shape" -> ujson.Arr(
-        points.map(p => ujson.Obj("lat" -> p.lat, "lon" -> p.lon))*
-      ),
-      "costing" -> "bicycle",
-      "costing_options" -> ujson.Obj(
-        "bicycle" -> ujson.Obj(
-          "bicycle_type" -> canonicalBikeType(profile.bicycleType),
-          // edge_walk must use the same routing preferences that produced the
-          // Valhalla route. This avoids rejecting a valid exact walk merely
-          // because the trace request used a different candidate profile.
-          "cycling_speed" -> speedKph,
-          "use_hills" -> useHills,
-          "use_roads" -> useRoads,
-          "avoid_bad_surfaces" -> profile.avoidBadSurfaces
-        )
-      ),
-      "shape_match" -> shapeMatch,
-      "shape_format" -> "polyline6",
-      "directions_options" -> ujson.Obj(
-        "units" -> "kilometers"
-      ),
-      "filters" -> ujson.Obj(
-        "action" -> "include",
-        "attributes" -> ujson.Arr(
-          "edge.length",
-          "edge.begin_shape_index",
-          "edge.end_shape_index",
-          "edge.road_class",
-          "edge.use",
-          "edge.unpaved",
-          "edge.surface",
-          "edge.cycle_lane",
-          "shape"
-        )
-      )
-    )
-    val body = post("/trace_attributes", ujson.write(payload))
-    val json = ujson.read(body)
-    val edges = parseTraceEdges(json)
-    val matchedShape = json.obj
-        .get("shape")
-        .collect {
-          case ujson.Str(encoded)
-              if encoded.nonEmpty =>
-            decodePolyline6(encoded)
-        }
-        .getOrElse(Vector.empty)
-    TraceAttributesDetailed(edges, matchedShape)
+  def median(xs: Vector[Double]): Double =
+    if xs.isEmpty then 0.0 else
+      val s=xs.sorted; if s.size%2==1 then s(s.size/2) else (s(s.size/2-1)+s(s.size/2))/2
 
-  private def elevateTraceForSafety(trace: TraceAttributesDetailed): Either[String, TraceAttributesDetailed] =
-    val elevatedShape = withElevation(trace.shape)
-    if elevatedShape.size == trace.shape.size &&
-        elevatedShape.forall(_.ele.isDefined)
-    then
-      Right(trace.copy(shape = elevatedShape))
+  def interpSamples(samples: Vector[(Double,Double)], s: Double): Option[Double] =
+    if samples.isEmpty || s<samples.head._1 || s>samples.last._1 then None
+    else if s==samples.last._1 then Some(samples.last._2)
     else
-      Left(
-        "trace_attributes matched shape has incomplete elevation for safety classification"
-      )
-
-  def traceAttributesDetailed(
-      points: Vector[Point],
-      speedKph: Double = 20.0,
-      useHills: Double = 0.70,
-      useRoads: Double = 0.35
-  ): Either[String, TraceAttributesDetailed] =
-    try
-      require(points.size >= 2, "Need at least two points for trace_attributes")
-      val exact = traceAttributesRequest(points, "edge_walk", speedKph, useHills, useRoads)
-      val usable = exact.edges.nonEmpty &&
-          exact.shape.size >= 2 &&
-          exact.edges.forall(
-            edge =>
-              edge.beginShapeIndex.nonEmpty &&
-                edge.endShapeIndex.nonEmpty
-          )
-      if usable then elevateTraceForSafety(exact)
-      else Left("trace_attributes edge_walk returned no shape-indexed edge geometry")
-    catch
-      case e: Exception =>
-        Left(
-          Option(
-            e.getMessage
-          ).getOrElse(e.toString)
-        )
-
-  def withElevation(points: Vector[Point]): Vector[Point] =
-    val cacheKey = points.map(coordinateBits)
-    heightShapeMemory.get(
-      cacheKey
-    ) match
-      case Some(elevated) =>
-        elevated
-      case None =>
-        val elevated = points.grouped(500).flatMap { chunk =>
-            val payload = ujson.Obj(
-              "shape" -> ujson.Arr(chunk.map { p =>
-                ujson.Obj("lat" -> p.lat, "lon" -> p.lon)
-              }*)
-            )
-            val body = post("/height", ujson.write(payload))
-            val json = ujson.read(body)
-            val heights = json("height").arr.toVector.map {
-              case ujson.Num(x) => Some(x)
-              case ujson.Null   => None
-              case _            => None
-            }
-            require(
-              heights.size == chunk.size,
-              s"Valhalla /height returned ${heights.size} heights for ${chunk.size} points"
-            )
-            chunk.zip(heights).map { case (p, ele) =>
-              p.copy(ele = ele)
-            }
-          }.toVector
-        heightShapeMemory.update(cacheKey, elevated)
-        elevated
-
-  private def locateSummary(point: Point): String =
-    val payload = ujson.Obj(
-      "verbose" -> true,
-      "locations" -> ujson.Arr(
-        ujson.Obj("lat" -> point.lat, "lon" -> point.lon)
-      ),
-      "costing" -> "bicycle"
-    )
-    val body = post("/locate", ujson.write(payload))
-    val json = ujson.read(body)
-    val first = json.arr.head
-    val edges = first("edges").arr
-    if edges.isEmpty then "no bicycle edges"
-    else
-      val nearest = edges.map { edge =>
-        edge.obj.get("distance").map(_.num).getOrElse(Double.PositiveInfinity)
-      }.min
-      f"${edges.size}%d bicycle edge(s), nearest ${nearest}%.1f m"
-
-  private def get(path: String): String =
-    val req = HttpRequest
-      .newBuilder(URI.create(baseUrl + path))
-      .header("Accept", "application/json")
-      .GET()
-      .build()
-    val res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-    if res.statusCode() / 100 != 2 then
-      sys.error(s"Valhalla ${res.statusCode()} for $path:\n${res.body()}")
-    res.body()
-
-  private def post(path: String, json: String): String =
-    val req = HttpRequest
-      .newBuilder(URI.create(baseUrl + path))
-      .header("Content-Type", "application/json")
-      .header("Accept", "application/json")
-      .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
-      .build()
-    val res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-    if res.statusCode() / 100 != 2 then
-      sys.error(s"Valhalla ${res.statusCode()} for $path:\n${res.body()}")
-    res.body()
-
-  private def canonicalBikeType(s: String): String =
-    s.toLowerCase match
-      case "road"     => "Road"
-      case "hybrid"   => "Hybrid"
-      case "city"     => "City"
-      case "cross"    => "Cross"
-      case "mountain" => "Mountain"
-      case other       => sys.error(s"Unsupported bicycle type: $other")
-
-  private def decodePolyline6(encoded: String): Vector[Point] =
-    val out = Vector.newBuilder[Point]
-    var index = 0
-    var lat = 0L
-    var lon = 0L
-
-    def nextDelta(): Long =
-      var result = 0L
-      var shift = 0
-      var keepReading = true
-      while keepReading do
-        if index >= encoded.length then
-          sys.error("Invalid/truncated Valhalla polyline")
-        val value = encoded.charAt(index).toInt - 63
-        index += 1
-        result |= ((value & 0x1f).toLong << shift)
-        shift += 5
-        keepReading = value >= 0x20
-      if (result & 1L) == 0L then result >> 1
-      else ~(result >> 1)
-    while index < encoded.length do
-      lat += nextDelta()
-      lon += nextDelta()
-      out += Point(lat / 1e6, lon / 1e6)
-    out.result()
-
-object RouteSearchProfiles:
-  // Minimal simultaneous profile cover validated against the canonical product
-  // graph and rider outputs. Recompute only when the canonical dataset or
-  // connector/safety semantics materially change.
-  val all: Vector[SearchProfileKey] =
-    Vector(
-      SearchProfileKey(20.0, 0.25, 0.35),
-      SearchProfileKey(20.0, 0.50, 0.35),
-      SearchProfileKey(20.0, 0.90, 0.35),
-      SearchProfileKey(15.0, 0.05, 0.35),
-      SearchProfileKey(15.0, 0.50, 0.75),
-      SearchProfileKey(15.0, 0.90, 0.35),
-      SearchProfileKey(15.0, 0.90, 0.75),
-      SearchProfileKey(25.0, 0.05, 0.35),
-      SearchProfileKey(25.0, 0.90, 0.35),
-      SearchProfileKey(15.0, 0.70, 0.55),
-      SearchProfileKey(25.0, 0.16, 0.75),
-      SearchProfileKey(20.0, 0.98, 0.55)
-    )
-
-  val provenance: String =
-    s"${all.size} production profiles = validated minimal simultaneous cover for the current canonical dataset"
-
-class RouteCache:
-  // Run-local cache only. The planner no longer writes mutable routing cache
-  // files to the user's filesystem. This still de-duplicates repeated Valhalla
-  // calls between the two candidate-endpoint matrix builds in one invocation.
-  private case class Key(
-      fromLatBits: Long,
-      fromLonBits: Long,
-      toLatBits: Long,
-      toLonBits: Long,
-      avoidBits: Vector[(Long, Long)],
-      speedBits: Long,
-      hillsBits: Long,
-      roadsBits: Long
-  )
-  private val memory =
-    mutable.HashMap.empty[
-      Key,
-      RouteResult
-    ]
-
-  // Exact run-local cache for /trace_attributes. A successful /route request is
-  // often reused for another mandatory GPX with identical connector endpoints.
-  // Previously the route itself was cached but its exact edge_walk trace was
-  // recomputed every time. The trace request is a pure function of the same
-  // route-cache key and returned raw shape, so reusing it changes no connector
-  // semantics and creates no persistent filesystem state.
-  private val traceMemory =
-    mutable.HashMap.empty[
-      Key,
-      TraceAttributesDetailed
-    ]
-
-  case class Fetch(route: RouteResult, cacheHit: Boolean)
-
-  private def bits(value: Double): Long =
-    java.lang.Double.doubleToLongBits(value)
-
-  private def key(
-      from: Point,
-      to: Point,
-      avoidLocations: Vector[Point],
-      speedOverrideKph: Option[Double],
-      useHillsOverride: Option[Double],
-      useRoadsOverride: Option[Double]
-  ): Key =
-    Key(
-      fromLatBits = bits(from.lat),
-      fromLonBits = bits(from.lon),
-      toLatBits = bits(to.lat),
-      toLonBits = bits(to.lon),
-      avoidBits =
-        avoidLocations.map(
-          point =>
-            (bits(point.lat), bits(point.lon))
-        ),
-      speedBits =
-        bits(
-          speedOverrideKph.getOrElse(Double.NaN)
-        ),
-      hillsBits =
-        bits(
-          useHillsOverride.getOrElse(Double.NaN)
-        ),
-      roadsBits = bits(useRoadsOverride.getOrElse(Double.NaN))
-    )
-
-  def getOrRoute(
-      from: Point,
-      to: Point,
-      valhalla: Valhalla,
-      avoidLocations: Vector[Point] = Vector.empty,
-      speedOverrideKph: Option[Double] = None,
-      useHillsOverride: Option[Double] = None,
-      useRoadsOverride: Option[Double] = None
-  ): Either[String, Fetch] =
-    val cacheKey = key(from, to, avoidLocations, speedOverrideKph, useHillsOverride, useRoadsOverride)
-    memory.get(
-      cacheKey
-    ) match
-      case Some(route) =>
-        Right(Fetch(route, cacheHit = true))
-      case None =>
-        valhalla.route(
-          from,
-          to,
-          avoidLocations,
-          speedOverrideKph,
-          useHillsOverride,
-          useRoadsOverride
-        ).map { route =>
-          memory.update(cacheKey, route)
-          Fetch(route, cacheHit = false)
-        }
-
-  def getOrTraceAttributes(
-      from: Point,
-      to: Point,
-      route: RouteResult,
-      valhalla: Valhalla,
-      avoidLocations: Vector[Point],
-      speedKph: Double,
-      useHills: Double,
-      useRoads: Double
-  ): Either[String, TraceAttributesDetailed] =
-    // The exact edge_walk must use the *resolved* routing preferences that
-    // produced this route. Keep them explicit here instead of inventing
-    // fallback defaults inside the cache: that makes the trace-cache key and
-    // the Valhalla trace request describe exactly the same route/profile.
-    val cacheKey = key(from, to, avoidLocations, Some(speedKph), Some(useHills), Some(useRoads))
-    traceMemory.get(cacheKey) match
-      case Some(trace) =>
-        Right(trace)
-      case None =>
-        valhalla.traceAttributesDetailed(
-          route.rawValhallaPoints,
-          speedKph,
-          useHills,
-          useRoads
-        ).map { trace =>
-          traceMemory.update(cacheKey, trace)
-          trace
-        }
-
-object TransferModel:
-  // Hardcoded MTB transfer assumptions. These are not user knobs.
-  // Surface affects rolling resistance. "path" is allowed, but mildly penalized
-  // so a normal track/road transfer wins when it is reasonably competitive.
-  val DefaultCrr = 0.010
-  val PathPenaltySecondsPerKm = 150.0
-
-  def surfaceCrr(surface: String, unpaved: Boolean): Double =
-    surface.toLowerCase match
-      case "paved_smooth" => 0.006
-      case "paved"        => 0.007
-      case "compacted"    => 0.010
-      case "gravel"       => 0.013
-      case "dirt"         => 0.016
-      case "mud"          => 0.025
-      case "sand"         => 0.030
-      case "impassable"   => 0.050
-      case _               => if unpaved then 0.014 else DefaultCrr
-
-  def effectiveCrr(edges: Vector[TraceEdge]): Double =
-    val totalKm = edges.map(_.lengthKm).sum
-    if totalKm <= 1e-9 then DefaultCrr
-    else
-      edges.map { e =>
-        e.lengthKm * surfaceCrr(e.surface, e.unpaved)
-      }.sum / totalKm
-
-  def pathFraction(edges: Vector[TraceEdge]): Double =
-    val totalKm = edges.map(_.lengthKm).sum
-    if totalKm <= 1e-9 then 0.0
-    else
-      edges.filter(_.use == "path").map(_.lengthKm).sum / totalKm
-
-  def qualityPenaltySeconds(edges: Vector[TraceEdge]): Double =
-    val pathKm = edges.filter(_.use == "path").map(_.lengthKm).sum
-    pathKm * PathPenaltySecondsPerKm
-
-
-object Scoring:
-  def connector(
-      route: RouteResult,
-      cfg: Config,
-      trace: TraceAttributesDetailed,
-      routingSpeedKph: Double,
-      routingUseHills: Double,
-      routingUseRoads: Double
-  ): Connector =
-    val traceEdges = trace.edges
-    val (ascent, descent) = Geometry.ascentDescent(route.points)
-    val lateAscent = Geometry.exponentiallyWeightedAscentNearEnd(route.points, cfg.arrivalWindowM)
-    val crr = TransferModel.effectiveCrr(traceEdges)
-    val pathFraction = TransferModel.pathFraction(traceEdges)
-    val physics = RidePhysics.estimate(route.points, cfg, downhillCapKph = None, crrOverride = crr)
-
-    // Climbing is already priced by rider power/time. Keep only:
-    // 1) arrival-recovery preference and
-    // 2) a small preference for transfer-like track/road over OSM "path".
-    val arrivalPenaltySeconds = lateAscent / 100.0 * cfg.arrivalClimbPenaltyMinPer100m * 60.0
-    val qualityPenaltySeconds = TransferModel.qualityPenaltySeconds(traceEdges)
-    val candidateComfortPenaltySeconds =
-      PowerPolicy.candidateComfortThresholdsW(cfg.riderPowerW)
-        .map(physics.abovePowerSeconds)
-        .sum
-
-    // ---------------------------------------------------------------
-    // ROAD + TECHNICAL-DOWNHILL EDGE ALIGNMENT
-    //
-    // Hard road/downhill safety must use the actual shape-indexed Valhalla
-    // edge geometry. The old implementation allocated whole-route physics
-    // time by edge-length fraction and classified a 30/100 m grade window by
-    // whichever edge contained its midpoint. Both are unsafe at boundaries.
-    //
-    // Valhalla begin/end_shape_index refer to the returned trace shape.
-    // Carry the already-elevated route profile onto that matched shape by
-    // horizontal projection, then evaluate contiguous edge runs directly.
-    // -----------------------------------------------------------------
-
-    // traceAttributesDetailed already returns the exact edge-walk matched shape
-    // with its own Valhalla elevation. Do not re-project it onto route.points:
-    // nearest-point projection is ambiguous at self-intersections/overpasses and
-    // can transfer elevation from the wrong traversal.
-    val traceShapeElevated = trace.shape
-
-    def validEdgeRange(edge: TraceEdge): Option[(Int, Int)] =
-      for
-        begin <-
-          edge.beginShapeIndex
-        end <-
-          edge.endShapeIndex
-        if begin >= 0
-        if end >= begin
-        if end < traceShapeElevated.size
-      yield
-        (begin, end)
-    require(
-      traceShapeElevated.size >= 2 &&
-        traceEdges.nonEmpty &&
-        traceEdges.forall(
-          edge =>
-            validEdgeRange(
-              edge
-            ).nonEmpty
-        ),
-      "Shape-indexed trace geometry is required for connector safety classification"
-    )
-
-    case class EdgeRun(beginShapeIndex: Int, endShapeIndex: Int, edges: Vector[TraceEdge])
-
-    def edgeRuns(
-        predicate: TraceEdge => Boolean
-    ): Vector[EdgeRun] =
-      val out = Vector.newBuilder[EdgeRun]
-      var activeBegin = -1
-      var activeEnd = -1
-      val activeEdges = mutable.ArrayBuffer.empty[TraceEdge]
-
-      def flush(): Unit =
-        if activeBegin >= 0 &&
-            activeEnd >= activeBegin &&
-            activeEdges.nonEmpty
-        then
-          out +=
-            EdgeRun(activeBegin, activeEnd, activeEdges.toVector)
-        activeBegin = -1
-        activeEnd = -1
-        activeEdges.clear()
-      traceEdges.foreach { edge =>
-        val (
-          begin,
-          end
-        ) =
-          validEdgeRange(
-            edge
-          ).get
-        if predicate(edge)
-        then
-          if activeBegin < 0 then
-            activeBegin = begin
-            activeEnd = end
-          else if begin <= activeEnd + 1
-          then
-            activeEnd = math.max(activeEnd, end)
-          else
-            flush()
-            activeBegin = begin
-            activeEnd = end
-          activeEdges +=
-            edge
-        else
-          flush()
-      }
-      flush()
-      out.result()
-
-    def runPoints(run: EdgeRun): Vector[Point] =
-      traceShapeElevated.slice(run.beginShapeIndex, run.endShapeIndex + 1)
-
-    def modeledRunSeconds(run: EdgeRun): Double =
-      RidePhysics.estimate(
-        runPoints(
-          run
-        ),
-        cfg,
-        downhillCapKph = None,
-        crrOverride = TransferModel.effectiveCrr(run.edges)
-      ).totalSeconds
-
-    def modeledEdgeSeconds(
-        predicate: TraceEdge => Boolean
-    ): Double =
-      edgeRuns(
-        predicate
-      ).map(
-        modeledRunSeconds
-      ).sum
-
-    def cycleLaneKind(edge: TraceEdge): String =
-      edge.cycleLane.trim.toLowerCase match
-        case "" | "no" | "unknown" | "false" =>
-          "none"
-        case other =>
-          other
-
-    val hasMotorwayTrunk =
-      traceEdges.exists(
-        edge =>
-          Set(
-            "motorway",
-            "trunk"
-          )(edge.roadClass)
-      )
-    val majorRoadSeconds = modeledEdgeSeconds { edge =>
-        Set("motorway", "trunk", "primary")(edge.roadClass)
-      }
-    val motorwayTrunkSeconds = modeledEdgeSeconds { edge =>
-        Set("motorway", "trunk")(edge.roadClass)
-      }
-    val primaryNoCycleSeconds = modeledEdgeSeconds { edge =>
-        edge.roadClass == "primary" &&
-          cycleLaneKind(edge) == "none"
-      }
-    val primarySharedSeconds = modeledEdgeSeconds { edge =>
-        edge.roadClass == "primary" &&
-          cycleLaneKind(edge) == "shared"
-      }
-    val primaryWithCycleSeconds = modeledEdgeSeconds { edge =>
-        edge.roadClass == "primary" &&
-          cycleLaneKind(edge) != "none"
-      }
-    val secondaryNoCycleSeconds = modeledEdgeSeconds { edge =>
-        edge.roadClass == "secondary" &&
-          cycleLaneKind(edge) == "none"
-      }
-    val secondarySharedSeconds = modeledEdgeSeconds { edge =>
-        edge.roadClass == "secondary" &&
-          cycleLaneKind(edge) == "shared"
-      }
-    val longestLowProtectionPrimarySeconds = edgeRuns { edge =>
-        edge.roadClass == "primary" &&
-          Set(
-            "none",
-            "shared"
-          )(cycleLaneKind(edge))
-      }.map(
-        modeledRunSeconds
-      ).foldLeft(
-        0.0
-      )(math.max)
-    val unpavedSeconds = modeledEdgeSeconds(_.unpaved)
-
-    def technicalDownhillEdge(edge: TraceEdge): Boolean =
-      edge.unpaved ||
-        (
-          edge.use == "path" &&
-            !Set("paved_smooth", "paved", "asphalt", "concrete")(edge.surface.trim.toLowerCase)
-        )
-
-    def technicalPathEdge(edge: TraceEdge): Boolean =
-      edge.use == "path" && technicalDownhillEdge(edge)
-
-    // Hard downhill metrics are evaluated only inside contiguous technical
-    // runs. A paved midpoint can no longer hide an otherwise technical 30 m
-    // window, and a one-metre technical edge cannot contaminate a mostly paved
-    // 30 m window.
-    def maxRunDescentPct(
-        predicate: TraceEdge => Boolean,
-        windowM: Double
-    ): Double =
-      edgeRuns(
-        predicate
-      ).map(
-        run =>
-          Geometry.maxSustainedDescentPct(
-            runPoints(
-              run
-            ),
-            windowM
-          )
-      ).foldLeft(
-        0.0
-      )(math.max)
-    val maxTechnicalDownhillGrade30Pct = maxRunDescentPct(technicalDownhillEdge, 30.0)
-    val maxTechnicalDownhillGrade100Pct = maxRunDescentPct(technicalDownhillEdge, 100.0)
-    val maxTechnicalPathDownhillGrade30Pct = maxRunDescentPct(technicalPathEdge, 30.0)
-
-    // Moderate handling is a soft ranking metric, but its geometry must not
-    // depend on an arbitrary 10 m phase. Compute the union of actual ridden
-    // distance covered by qualifying 30 m windows inside category-pure runs.
-    case class HandlingCoverage(startM: Double, endM: Double, seconds: Double)
-    val traceCumulative = Geometry.pointsWithCumulativeDistance(traceShapeElevated)
-
-    def shapeDistanceAtIndex(index: Int): Double =
-      traceCumulative(
-        math.max(0, math.min(traceCumulative.size - 1, index))
-      )._1
-
-    def handlingCoverageForRuns(
-        predicate: TraceEdge => Boolean,
-        thresholdPct: Double,
-        referenceSpeedKph: Double
-    ): Vector[HandlingCoverage] =
-      edgeRuns(
-        predicate
-      ).flatMap { run =>
-        val points = runPoints(run)
-        val runStartM = shapeDistanceAtIndex(run.beginShapeIndex)
-        Geometry.sustainedDescentCoverageIntervals(
-          points,
-          windowM = 30.0,
-          minDescentPct = thresholdPct
-        ).map {
-          case (
-                localStartM,
-                localEndM
-              ) =>
-            val distanceM =
-              math.max(
-                0.0,
-                localEndM -
-                  localStartM
-              )
-            HandlingCoverage(
-              startM =
-                runStartM +
-                  localStartM,
-              endM =
-                runStartM +
-                  localEndM,
-              seconds =
-                distanceM /
-                  (
-                    referenceSpeedKph /
-                      3.6
-                  )
-            )
-        }
-      }
-    val pathHandlingCoverage = handlingCoverageForRuns(technicalPathEdge, thresholdPct = 10.0, referenceSpeedKph = 6.0)
-    val roughNonPathHandlingCoverage =
-      handlingCoverageForRuns(
-        edge =>
-          technicalDownhillEdge(
-            edge
-          ) &&
-            !technicalPathEdge(
-              edge
-            ),
-        thresholdPct = 14.0,
-        referenceSpeedKph = 8.0
-      )
-    val handlingCoverage =
-      (
-        pathHandlingCoverage ++
-          roughNonPathHandlingCoverage
-      ).sortBy(_.startM)
-    val downhillHandlingSeconds =
-      handlingCoverage.map(
-        _.seconds
-      ).sum
-    val mergedHandlingCoverage =
-      handlingCoverage.foldLeft(
-        Vector.empty[(Double, Double)]
-      ) {
-        case (
-              acc,
-              coverage
-            ) =>
-          acc.lastOption match
-            case Some((previousStartM, previousEndM))
-                if coverage.startM <= previousEndM + 1e-6 =>
-              acc.dropRight(
-                1
-              ) :+
-                (previousStartM, math.max(previousEndM, coverage.endM))
-            case _ =>
-              acc :+
-                (coverage.startM, coverage.endM)
-      }
-    val longestTechnicalDownhillRunM =
-      mergedHandlingCoverage.map {
-        case (
-              startM,
-              endM
-            ) =>
-          math.max(
-            0.0,
-            endM -
-              startM
-          )
-      }.foldLeft(
-        0.0
-      )(math.max)
-    val connectorProfile = Geometry.profileStats(route.points)
-    val maxGrade30Pct = connectorProfile.maxGrade30Pct
-    val maxGrade100Pct = connectorProfile.maxGrade100Pct
-    Connector(
-      route = route,
-      ascentM = ascent,
-      descentM = descent,
-      lateAscentM = lateAscent,
-      physicsSeconds = physics.totalSeconds,
-      fatiguePenaltySeconds = arrivalPenaltySeconds,
-      transferQualityPenaltySeconds = qualityPenaltySeconds,
-      candidateComfortPenaltySeconds = candidateComfortPenaltySeconds,
-      maxRiderPowerW = physics.maxRiderPowerW,
-      maxGrade30Pct = maxGrade30Pct,
-      maxGrade100Pct = maxGrade100Pct,
-      majorRoadSeconds = majorRoadSeconds,
-      motorwayTrunkSeconds = motorwayTrunkSeconds,
-      hasMotorwayTrunk = hasMotorwayTrunk,
-      primaryNoCycleSeconds = primaryNoCycleSeconds,
-      primarySharedSeconds = primarySharedSeconds,
-      primaryWithCycleSeconds = primaryWithCycleSeconds,
-      secondaryNoCycleSeconds = secondaryNoCycleSeconds,
-      secondarySharedSeconds = secondarySharedSeconds,
-      longestLowProtectionPrimarySeconds = longestLowProtectionPrimarySeconds,
-      unpavedSeconds = unpavedSeconds,
-      downhillHandlingSeconds = downhillHandlingSeconds,
-      longestTechnicalDownhillRunM = longestTechnicalDownhillRunM,
-      maxTechnicalDownhillGrade30Pct = maxTechnicalDownhillGrade30Pct,
-      maxTechnicalDownhillGrade100Pct = maxTechnicalDownhillGrade100Pct,
-      maxTechnicalPathDownhillGrade30Pct = maxTechnicalPathDownhillGrade30Pct,
-      effectiveCrr = crr,
-      pathFraction = pathFraction,
-      routingSpeedKph = routingSpeedKph,
-      routingUseHills = routingUseHills,
-      routingUseRoads = routingUseRoads,
-      traceEdges = traceEdges,
-      powerAboveSecondsByThreshold = physics.powerAboveSeconds,
-      longestPowerStreakSecondsByThreshold = physics.longestPowerStreakSeconds,
-      candidateComfortSpikeLoadSeconds = physics.candidateComfortSpikeLoadSeconds
-    )
-
-case class Matrix(
-    startToTrail: Vector[Option[Connector]],
-    between: Vector[Vector[Option[Connector]]],
-    trailToFinish: Vector[Option[Connector]],
-    startToFinish: Option[Connector]
-)
-
-object DifferentialEvidence:
-  private val rerouteLines = mutable.ArrayBuffer.empty[String]
-  def add(line: String): Unit = rerouteLines.synchronized { rerouteLines += line }
-  def snapshot: Vector[String] = rerouteLines.synchronized { rerouteLines.toVector }
-
-object CorridorPolicy:
-  // Canonical GPX endpoints are the exact connector join boundaries.
-  // `corridorToleranceM` is GPS/GPX matching tolerance, NOT permission to ride
-  // that many metres of a protected trail. Every mandatory and explicit
-  // /avoid GPX is protected over its full supplied geometry.
-  val corridorToleranceM = 12.0
-  val maxConnectorCoTravelM = 12.0
-
-object MatrixBuilder:
-  def build(
-      start: Point,
-      trails: Vector[Trail],
-      finish: Trail,
-      router: RouteCache,
-      valhalla: Valhalla,
-      cfg: Config,
-      safetyReservedTrails: Vector[Trail],
-      strictForbiddenTrails: Vector[Trail],
-      buildBetween: Boolean = true
-  ): Matrix =
-    val n = trails.size
-    val OverlapToleranceM = CorridorPolicy.corridorToleranceM
-    val reservedTrails = safetyReservedTrails.distinctBy(_.path)
-    val overlapSummaryMemory = mutable.HashMap.empty[
-        Vector[Point],
-        Vector[(Trail, Double)]
-      ]
-
-    case class ScoringSemanticKey(points: Vector[Point], trace: TraceAttributesDetailed)
-    val scoringMemory = mutable.HashMap.empty[
-        ScoringSemanticKey,
-        Connector
-      ]
-
-    def overlapSummary(route: RouteResult): Vector[(Trail, Double)] =
-      overlapSummaryMemory.get(
-        route.points
-      ) match
-        case Some(overlaps) =>
-          overlaps
-        case None =>
-          val overlaps = reservedTrails
-              .map { trail =>
-                trail ->
-                  Geometry.coTravelOverlapMeters(route.points, trail.points, OverlapToleranceM)
-              }
-              .filter { case (_, meters) =>
-                meters >
-                  CorridorPolicy.maxConnectorCoTravelM
-              }
-              .sortBy { case (_, meters) =>
-                -meters
-              }
-          overlapSummaryMemory.update(route.points, overlaps)
-          overlaps
-
-    def blockPoint(badTrail: Trail, violatingRoute: RouteResult, from: Point, to: Point): Option[Point] =
-      Geometry.coTravelBlockPoint(violatingRoute.points, badTrail.points, OverlapToleranceM, from, to)
-
-    val SearchProfiles = RouteSearchProfiles.all
-
-    // Every protected-corridor blocker is genuinely monotone: once a
-    // blocker point has been sent to Valhalla it is retained for every later
-    // reroute. Repeated violation of the same GPX may add another blocker.
-    //
-    // The cap is only an operational fail-closed guard, not a completeness
-    // theorem. Normal termination is driven by actual new constraint points.
-    val MaxSafetyReroutes =
-      math.max(
-        64,
-        reservedTrails.map(t => math.max(1, t.points.size - 1)).sum
-      )
-
-    case class SafeCandidate(connector: Connector)
-
-    def safeCandidate(label: String, from: Point, to: Point, speedKph: Double, useHills: Double, useRoads: Double): Either[String, SafeCandidate] =
-      var avoidLocations = Vector.empty[Point]
-      var reroutes = 0
-      var lastProblem = ""
-      while reroutes <= MaxSafetyReroutes do
-        router.getOrRoute(
-          from,
-          to,
-          valhalla,
-          avoidLocations = avoidLocations,
-          speedOverrideKph = Some(speedKph),
-          useHillsOverride = Some(useHills),
-          useRoadsOverride = Some(useRoads)
-        ) match
-          case Left(error) =>
-            return Left(error)
-          case Right(fetch) =>
-            val badOverlaps = overlapSummary(fetch.route)
-            if badOverlaps.isEmpty then
-              val trace =
-                router.getOrTraceAttributes(
-                  from,
-                  to,
-                  fetch.route,
-                  valhalla,
-                  avoidLocations = avoidLocations,
-                  speedKph = speedKph,
-                  useHills = useHills,
-                  useRoads = useRoads
-                ) match
-                  case Right(trace) =>
-                    trace
-                  case Left(error) =>
-                    return Left(s"exact edge_walk unavailable for safety classification: $error")
-              val scoringKey = ScoringSemanticKey(points = fetch.route.points, trace = trace)
-              val connector =
-                scoringMemory.get(
-                  scoringKey
-                ) match
-                  case Some(base) =>
-                    base.copy(
-                      route = fetch.route,
-                      routingSpeedKph = speedKph,
-                      routingUseHills = useHills,
-                      routingUseRoads = useRoads
-                    )
-                  case None =>
-                    val computed =
-                      Scoring.connector(
-                        fetch.route,
-                        cfg,
-                        trace,
-                        routingSpeedKph = speedKph,
-                        routingUseHills = useHills,
-                        routingUseRoads = useRoads
-                      )
-                    scoringMemory.update(scoringKey, computed)
-                    computed
-              return Right(SafeCandidate(connector))
-            lastProblem = badOverlaps
-                .map { case (trail, meters) =>
-                  f"${trail.name}=${meters}%.0f m"
-                }
-                .mkString(", ")
-            val derivedBlockersByTrail = badOverlaps.map { case (trail, overlapM) =>
-                val blocker = blockPoint(
-                  trail,
-                  fetch.route,
-                  from,
-                  to
-                )
-                (trail, overlapM, blocker)
-              }
-            val derivedBlockers = derivedBlockersByTrail.flatMap(_._3.toVector)
-
-            if label == "Bunker -> RegenbogenAbzweiger" then
-              val routeDistanceM = fetch.route.lengthKm * 1000.0
-              derivedBlockersByTrail.foreach { case (trail, overlapM, blocker) =>
-                val blockerText = blocker match
-                  case None => "NONE"
-                  case Some(p) =>
-                    val depth = math.min(
-                      Geometry.distanceMeters(p, from),
-                      Geometry.distanceMeters(p, to)
-                    )
-                    f"${p.lat}%.6f,${p.lon}%.6f depth=$depth%.1fm"
-                DifferentialEvidence.add(
-                  f"old-blocker label=$label profile=v$speedKph%.0f-h$useHills%.2f-r$useRoads%.2f reroute=$reroutes " +
-                    f"routeDistance=$routeDistanceM%.1fm corridor=${trail.name} overlap=$overlapM%.3fm blocker=[$blockerText]"
-                )
-              }
-
-            if derivedBlockers.size <
-                badOverlaps.size
-            then
-              return Left(
-                s"trail-safety detected protected-corridor overlap but could not derive a blocker: $lastProblem"
-              )
-            val accumulated = Geometry.appendExactDistinctPoints(avoidLocations, derivedBlockers)
-            val added = accumulated.size -
-                avoidLocations.size
-            avoidLocations = accumulated
-            if added == 0 then
-              return Left(s"trail-safety made no constraint progress on repeated overlap: $lastProblem")
-            reroutes +=
-              1
-      Left(s"trail-safety reached defensive reroute cap $MaxSafetyReroutes; last overlap: $lastProblem")
-
-    def fetch(label: String, from: Point, to: Point): Option[Connector] =
-      def directAttempt(profile: SearchProfileKey): Either[String, SafeCandidate] =
-        safeCandidate(label, from, to, profile.speedKph, profile.useHills, profile.useRoads)
-
-      val directAttempts = SearchProfiles.map { profile =>
-          profile ->
-            directAttempt(profile)
-        }
-      val directResults =
-        directAttempts.flatMap {
-          case (_, Right(candidate)) =>
-            Some(candidate)
-          case _ =>
-            None
-        }
-      val results = directResults
-      val failureReasons =
-        directAttempts.flatMap {
-          case (_, Left(error)) =>
-            Some("direct: " + error)
-          case _ =>
-            None
-        }
-      if results.isEmpty then
-        val reasonText =
-          if failureReasons.isEmpty then ""
-          else
-            val grouped = failureReasons
-                .groupBy(identity)
-                .toVector
-                .map { case (reason, xs) => reason -> xs.size }
-                .sortBy { case (_, count) => -count }
-            val (reason, count) = grouped.head
-            s"; most common failure $count/${math.max(1, directAttempts.size)}: $reason"
-        Console.err.println(
-          s"UNREACHABLE $label" +
-            reasonText
-        )
-        None
+      var i=0
+      while i+1<samples.size && samples(i+1)._1<s do i+=1
+      if i+1>=samples.size then Some(samples.last._2)
       else
-        // Keep every successful SearchProfile candidate here.
-        // Bit-identical routed geometry is NOT solver-semantic equality:
-        // coincident graph edges may carry different road/surface metadata.
-        // Exact no-worse dominance is applied later, after all hard-safety
-        // dimensions are present.
-        val sortedByScore = results.sortBy { x =>
-            (
-              x.connector.physicsSeconds,
-              x.connector.candidateComfortPenaltySeconds,
-              x.connector.transferQualityPenaltySeconds,
-              x.connector.fatiguePenaltySeconds,
-              x.connector.pathFraction
-            )
-          }
-        val rawBestSeconds = sortedByScore.head.connector.physicsSeconds
+        val a=samples(i); val b=samples(i+1); val d=b._1-a._1
+        Some(if d<=1e-9 then a._2 else a._2+(s-a._1)/d*(b._2-a._2))
 
-        // Route-time / DEM / surface physics is not precise to a few seconds.
-        // Treat routes within roughly 5% as effectively tied, then prefer the
-        // one with lower V5 candidate comfort burden, then path/arrival burden.
-        // No fixed legacy power threshold or weighted effort score participates.
-        val indifferenceSeconds = math.min(45.0, math.max(10.0, rawBestSeconds * 0.05))
-        val nearEqual = sortedByScore.filter { x =>
-            x.connector.physicsSeconds <= rawBestSeconds + indifferenceSeconds
-          }
-        val chosenFetch = nearEqual.minBy { x =>
-            (
-              x.connector.candidateComfortPenaltySeconds,
-              x.connector.transferQualityPenaltySeconds,
-              x.connector.fatiguePenaltySeconds,
-              x.connector.pathFraction,
-              x.connector.physicsSeconds
-            )
-          }
-        val best0 = chosenFetch.connector
-        val best =
-          best0.copy(searchConnectorVariants = sortedByScore.map(_.connector))
-        Some(best)
-    if n == 0 then
-      val direct = fetch(s"${finish.name} -> ${finish.name}", start, finish.start)
-      Matrix(Vector.empty, Vector.empty, Vector.empty, direct)
+  case class EvidenceCorridor(label:String, reference:Vector[Point], candidates:Vector[EvidenceCandidate])
+
+  case class RiddenTrailOccurrence(trailIndex:Int, startSampleIndex:Int, endSampleIndex:Int)
+  case class RiddenTransferSegment(label:String, points:Vector[Point])
+
+  def percentile(xs:Vector[Double], p:Double):Double =
+    if xs.isEmpty then Double.NaN
     else
-      val startToTrail = trails.indices.map { i =>
-        fetch(s"${finish.name} -> ${trails(i).name}", start, trails(i).start)
-      }.toVector
-      val between =
-        if !buildBetween then Vector.fill(n)(Vector.fill[Option[Connector]](n)(None))
-        else trails.indices.map { i =>
-            trails.indices.map { j =>
-              if i == j then None
-              else
-                fetch(
-                  s"${trails(i).name} -> ${trails(j).name}",
-                  trails(i).end,
-                  trails(j).start
-                )
-            }.toVector
-          }.toVector
-      val trailToFinish = trails.indices.map { i =>
-        fetch(
-          s"${trails(i).name} -> ${finish.name}",
-          trails(i).end,
-          finish.start
+      val s=xs.sorted
+      val idx=math.max(0,math.min(s.size-1,math.round((s.size-1)*p).toInt))
+      s(idx)
+
+  /**
+   * Recover mandatory-trail occurrences inside a real ride before deriving
+   * transfer evidence. This is the production reference semantics: a phone
+   * recording is not itself one generic evidence corridor. Evidence belongs
+   * only to the actual mandatory->mandatory transfer that was ridden.
+   */
+  def riddenTrailOccurrence(ride:Gpx, trailIndex:Int, trails:Vector[Trail]):Option[RiddenTrailOccurrence] =
+    val trail=trails(trailIndex)
+    val denseTrail=samplePolyline(trail.points,8.0)
+    val trailLength=if denseTrail.size>=2 then cumulative(denseTrail).last else 0.0
+    if denseTrail.size<2 || trailLength<30.0 || ride.points.size<2 then None
+    else
+      val projection=Projection(
+        denseTrail.map(_.lat).sum/denseTrail.size,
+        denseTrail.map(_.lon).sum/denseTrail.size
+      )
+      val projected=ride.points.map { p =>
+        projectToPolyline(p,denseTrail,projection).getOrElse(
+          PolylineProjection(0.0,Double.PositiveInfinity,0.0)
         )
-      }.toVector
-      Matrix(startToTrail, between, trailToFinish, None)
+      }
+      val rideCum=cumulative(ride.points)
+      val startCandidates=projected.indices.filter { i =>
+        projected(i).lateralM<=18.0 && projected(i).alongM<=35.0
+      }
+      val endCandidates=projected.indices.filter { i =>
+        projected(i).lateralM<=18.0 && projected(i).alongM>=trailLength*0.82
+      }
+      var best=Option.empty[(Int,Int,Double)]
+      startCandidates.take(60).foreach { first =>
+        endCandidates.iterator.filter(_>first).take(80).foreach { last =>
+          val expectedProgress=projected(last).alongM
+          val riddenSpan=rideCum(last)-rideCum(first)
+          val spanOk=
+            riddenSpan>=math.max(20.0,expectedProgress*0.55) &&
+              riddenSpan<=expectedProgress*1.80+100.0
+          if spanOk then
+            val near=projected.slice(first,last+1).filter(_.lateralM<=18.0)
+            if near.size>=5 then
+              val alongs=near.map(_.alongM)
+              val coverage=(alongs.max-alongs.min)/trailLength
+              val nearFraction=near.size.toDouble/math.max(1,last-first+1).toDouble
+              val p90Gap=percentile(near.map(_.lateralM),0.90)
+              if coverage>=0.80 && nearFraction>=0.45 then
+                val score=
+                  math.abs(riddenSpan-expectedProgress) +
+                    p90Gap*5.0 +
+                    (1.0-nearFraction)*100.0 +
+                    (1.0-coverage)*20.0
+                best match
+                  case None => best=Some((first,last,score))
+                  case Some((_,_,oldScore)) if score<oldScore => best=Some((first,last,score))
+                  case _ => ()
+        }
+      }
+      best.map { case(first,last,_) => RiddenTrailOccurrence(trailIndex,first,last) }
 
-case class RideTimeEstimate(
-    totalSeconds: Double,
-    poweredSeconds: Double,
-    coastingSeconds: Double,
-    coastingDistanceKm: Double,
-    modeledDistanceKm: Double,
-    skippedDistanceKm: Double,
-    riderEnergyJ: Double,
-    maxRiderPowerW: Double,
-    powerAboveSeconds: Map[Int, Double],
-    leadingNonCoastSeconds: Double = 0.0,
-    trailingNonCoastSeconds: Double = 0.0,
-    internalNonCoastRunsSeconds: Vector[Double] = Vector.empty,
-    longestPowerStreakSeconds: Map[Int, Double] = Map.empty,
-    candidateComfortSpikeLoadSeconds: Double = 0.0
-):
-  def abovePowerSeconds(thresholdW: Int): Double =
-    powerAboveSeconds.getOrElse(thresholdW, 0.0)
-
-object RidePhysics:
-  private val Gravity = 9.80665
-  private val AirDensity = 1.225
-  private val CdA = 0.60
-  private val DefaultCrr = 0.010
-  private val DrivetrainEfficiency = 0.95
-  // /height elevation is not reliable enough for instantaneous 10-20 m power spikes.
-  // 30 m still captures short climbs, while suppressing single-sample DEM steps.
-  private val GradeWindowM = 30.0
-
-  // Fixed bike gearing for this rider/bike.
-  // Not exposed as CLI knobs: these are hardware facts, not route preferences.
-  private val WheelDiameterIn = 27.5
-  private val FrontTeeth = 32.0
-  private val RearTeeth = 51.0
-  private val PreferredCadenceRpm = 80.0
-  private val MinCadenceRpm = 45.0
-
-  def powerThresholdsW(targetW: Double): Vector[Int] =
-    PowerPolicy.trackedThresholdsW(targetW)
-
-  // Steep+twisty ordering uses geometry/elevation only; rider speed and old
-  // subset/flow rewards are intentionally not part of trail inclusion.
-  val NoviceSteepTwistyMinNetDescentPct: Double = 10.0
-  val NoviceSteepTwistyMinSinuosity: Double = 1.10
-
-  // Strong local-window detector. Local windows are noisier and common bends
-  // are frequent, so thresholds are deliberately stronger than whole-trail.
-  val NoviceSteepTwistyLocalShortWindowM: Double = 60.0
-  val NoviceSteepTwistyLocalShortMinNetDescentPct: Double = 18.0
-  val NoviceSteepTwistyLocalLongWindowM: Double = 100.0
-  val NoviceSteepTwistyLocalLongMinNetDescentPct: Double = 15.0
-  val NoviceSteepTwistyLocalMinSinuosity: Double = 1.20
-
-  def minPedalingSpeedKph: Double =
-    val wheelDiameterM = WheelDiameterIn * 0.0254
-    val wheelCircumferenceM = math.Pi * wheelDiameterM
-    val wheelRpm = MinCadenceRpm * FrontTeeth / RearTeeth
-    wheelRpm * wheelCircumferenceM * 60.0 / 1000.0
-
-  def estimate(
-      points: Vector[Point],
-      cfg: Config,
-      downhillCapKph: Option[Double] = None,
-      crrOverride: Double = DefaultCrr
-  ): RideTimeEstimate =
-    var totalSeconds = 0.0
-    var poweredSeconds = 0.0
-    var coastingSeconds = 0.0
-    var coastingMeters = 0.0
-    var modeledMeters = 0.0
-    var skippedMeters = 0.0
-    var riderEnergyJ = 0.0
-    var maxRiderPowerW = 0.0
-
-    // Power tracking is intentionally minimal: V5 candidate-comfort thresholds
-    // plus the separate hard-safety wall threshold.
-    val trackedPowerThresholdsW = powerThresholdsW(cfg.riderPowerW)
-    val currentPowerStreakSeconds =
-      mutable.Map.from(trackedPowerThresholdsW.map(_ -> 0.0))
-    val longestPowerStreakSeconds =
-      mutable.Map.from(trackedPowerThresholdsW.map(_ -> 0.0))
-    var candidateComfortSpikeLoadSeconds = 0.0
-    var seenCoast = false
-    var currentNonCoastSeconds = 0.0
-    var leadingNonCoastSeconds = 0.0
-    val internalNonCoastRuns = mutable.ArrayBuffer.empty[Double]
-    val above = mutable.Map.from(trackedPowerThresholdsW.map(_ -> 0.0))
-    if points.size < 2 then
-      return RideTimeEstimate(
-        totalSeconds = 0.0,
-        poweredSeconds = 0.0,
-        coastingSeconds = 0.0,
-        coastingDistanceKm = 0.0,
-        modeledDistanceKm = 0.0,
-        skippedDistanceKm = 0.0,
-        riderEnergyJ = 0.0,
-        maxRiderPowerW = 0.0,
-        powerAboveSeconds = above.toMap
-      )
-    val rawChunks = mutable.ArrayBuffer.empty[(Double, Option[Double])]
-    var anchor = points.head
-    var accumulatedMeters = 0.0
-    var i = 1
-    while i < points.size do
-      val current = points(i)
-      accumulatedMeters += Geometry.distanceMeters(points(i - 1), current)
-      val flush = accumulatedMeters >= GradeWindowM || i == points.size - 1
-      if flush && accumulatedMeters > 0.0 then
-        val delta = (anchor.ele, current.ele) match
-            case (Some(z0), Some(z1)) => Some(z1 - z0)
-            case _                    => None
-        rawChunks += ((accumulatedMeters, delta))
-        anchor = current
-        accumulatedMeters = 0.0
-      i += 1
-
-    // Do not evaluate a tiny final remainder as its own grade window.
-    // It is phase-sensitive and can turn one DEM step into a fake power spike.
-    val chunks =
-      if rawChunks.size >= 2 &&
-        rawChunks.last._1 < GradeWindowM * 0.5
-      then
-        val tail = rawChunks.remove(rawChunks.size - 1)
-        val prev = rawChunks.remove(rawChunks.size - 1)
-        val mergedDelta = (prev._2, tail._2) match
-            case (Some(a), Some(b)) => Some(a + b)
-            case _                  => None
-        rawChunks += ((prev._1 + tail._1, mergedDelta))
-        rawChunks.toVector
-      else
-        rawChunks.toVector
-    chunks.foreach { case (distanceM, deltaOpt) =>
-      deltaOpt match
-        case Some(deltaM) =>
-          val grade = deltaM / distanceM
-          val segment = segmentRide(grade, cfg, downhillCapKph, crrOverride)
-          val seconds = distanceM / math.max(segment.speedMps, 0.05)
-          totalSeconds += seconds
-          modeledMeters += distanceM
-
-          trackedPowerThresholdsW.foreach { threshold =>
-            if !segment.coasting &&
-                segment.riderPowerW > threshold.toDouble + 1e-6
-            then
-              val next =
-                currentPowerStreakSeconds.getOrElse(threshold, 0.0) + seconds
-              currentPowerStreakSeconds.update(threshold, next)
-              longestPowerStreakSeconds.update(
-                threshold,
-                math.max(longestPowerStreakSeconds.getOrElse(threshold, 0.0), next)
-              )
-            else
-              currentPowerStreakSeconds.update(threshold, 0.0)
-          }
-
-          val candidateSpikeBaseW =
-            PowerPolicy.candidateSpikeBaseW(cfg.riderPowerW)
-          if !segment.coasting &&
-              segment.riderPowerW > candidateSpikeBaseW + 1e-6
-          then
-            val normalizedExcess =
-              (segment.riderPowerW - candidateSpikeBaseW) /
-                PowerPolicy.candidateSpikeScaleW(cfg.riderPowerW)
-            candidateComfortSpikeLoadSeconds +=
-              normalizedExcess * normalizedExcess * seconds
-
-          // Keep non-coasting run boundaries as low-level technical physics
-          // diagnostics. They do not participate in trail inclusion or
-          // rider-profile selection.
-          if segment.coasting then
-            if !seenCoast then
-              leadingNonCoastSeconds = currentNonCoastSeconds
-              seenCoast = true
-            else if currentNonCoastSeconds > 0.5 then
-              internalNonCoastRuns += currentNonCoastSeconds
-            currentNonCoastSeconds = 0.0
-          else
-            currentNonCoastSeconds += seconds
-          if segment.coasting then
-            coastingSeconds += seconds
-            coastingMeters += distanceM
-          else
-            poweredSeconds += seconds
-            riderEnergyJ += segment.riderPowerW * seconds
-            maxRiderPowerW = math.max(maxRiderPowerW, segment.riderPowerW)
-            trackedPowerThresholdsW.foreach { threshold =>
-              if segment.riderPowerW > threshold.toDouble + 1e-6 then
-                above.update(threshold, above.getOrElse(threshold, 0.0) + seconds)
-            }
-        case None =>
-          skippedMeters += distanceM
-    }
-    val finalLeadingNonCoast =
-      if seenCoast then leadingNonCoastSeconds
-      else totalSeconds
-    val finalTrailingNonCoast =
-      if seenCoast then currentNonCoastSeconds
-      else totalSeconds
-    RideTimeEstimate(
-      totalSeconds = totalSeconds,
-      poweredSeconds = poweredSeconds,
-      coastingSeconds = coastingSeconds,
-      coastingDistanceKm = coastingMeters / 1000.0,
-      modeledDistanceKm = modeledMeters / 1000.0,
-      skippedDistanceKm = skippedMeters / 1000.0,
-      riderEnergyJ = riderEnergyJ,
-      maxRiderPowerW = maxRiderPowerW,
-      powerAboveSeconds = above.toMap,
-      leadingNonCoastSeconds = finalLeadingNonCoast,
-      trailingNonCoastSeconds = finalTrailingNonCoast,
-      internalNonCoastRunsSeconds = internalNonCoastRuns.toVector,
-      longestPowerStreakSeconds = longestPowerStreakSeconds.toMap,
-      candidateComfortSpikeLoadSeconds = candidateComfortSpikeLoadSeconds
-    )
-  private case class SegmentRide(speedMps: Double, coasting: Boolean, riderPowerW: Double)
-
-  private def segmentRide(grade: Double, cfg: Config, downhillCapKph: Option[Double], crr: Double): SegmentRide =
-    val totalMassKg = cfg.riderWeightKg + cfg.bikeWeightKg
-    val downhillCapMps = downhillCapKph.map(_ / 3.6)
-    val theta = math.atan(grade)
-    val sinTheta = math.sin(theta)
-    val cosTheta = math.cos(theta)
-
-    def applyDownhillCap(v: Double): Double =
-      downhillCapMps match
-        case Some(cap) => math.min(v, cap)
-        case None      => v
-
-    val coastDriveForce = -totalMassKg * Gravity * sinTheta -
-        crr * totalMassKg * Gravity * cosTheta
-    if grade < 0.0 && coastDriveForce > 0.0 then
-      val terminal =
-        math.sqrt(
-          (2.0 * coastDriveForce) /
-            (AirDensity * CdA)
-        )
-
-      // Downhill semantics:
-      // - technical trail GPXs: if gravity can move the bike at all,
-      //   the rider does NOT pedal; they only coast/brake to the trail cap.
-      // - transfers: keep the existing practical rule that extremely slow
-      //   (<2 km/h) natural coasting may be supplemented by pedalling.
-      val technicalTrail = downhillCapKph.nonEmpty
-      if technicalTrail || terminal >= (2.0 / 3.6) then
-        SegmentRide(speedMps = applyDownhillCap(terminal), coasting = true, riderPowerW = 0.0)
-      else
-        poweredSegment(theta, cfg, applyDownhillCap, crr, capSpeed = downhillCapKph.nonEmpty)
-    else
-      poweredSegment(theta, cfg, applyDownhillCap, crr, capSpeed = downhillCapKph.nonEmpty)
-
-  private def poweredSegment(
-      theta: Double,
-      cfg: Config,
-      applyDownhillCap: Double => Double,
-      crr: Double,
-      capSpeed: Boolean
-  ): SegmentRide =
-    val easySpeed = poweredSpeedForRiderPower(theta, cfg, cfg.riderPowerW, crr)
-    val minPedalMps = minPedalingSpeedKph / 3.6
-
-    def maybeCap(v: Double): Double =
-      if capSpeed then applyDownhillCap(v) else v
-    if easySpeed >= minPedalMps then
-      SegmentRide(speedMps = maybeCap(easySpeed), coasting = false, riderPowerW = cfg.riderPowerW)
-    else
-      // Easy target would force cadence below the conservative 45 rpm
-      // climb floor even in 32x51. Rider stays on the bike and increases
-      // crank power only enough to keep that low cadence.
-      val required = requiredRiderPower(minPedalMps, theta, cfg, crr)
-      SegmentRide(speedMps = maybeCap(minPedalMps), coasting = false, riderPowerW = math.max(cfg.riderPowerW, required))
-
-  private def requiredRiderPower(speedMps: Double, theta: Double, cfg: Config, crr: Double): Double =
-    val totalMassKg = cfg.riderWeightKg + cfg.bikeWeightKg
-    val sinTheta = math.sin(theta)
-    val cosTheta = math.cos(theta)
-    val gravityAndRolling = totalMassKg * Gravity * sinTheta +
-        crr * totalMassKg * Gravity * cosTheta
-    val aero = 0.5 * AirDensity * CdA * speedMps * speedMps
-    val wheelPower = math.max(0.0, (gravityAndRolling + aero) * speedMps)
-    wheelPower / DrivetrainEfficiency
-
-  private def poweredSpeedForRiderPower(theta: Double, cfg: Config, riderPowerW: Double, crr: Double): Double =
-    val totalMassKg = cfg.riderWeightKg + cfg.bikeWeightKg
-    val wheelPower = riderPowerW * DrivetrainEfficiency
-    val sinTheta = math.sin(theta)
-    val cosTheta = math.cos(theta)
-
-    def requiredWheelPower(v: Double): Double =
-      val gravityAndRolling = totalMassKg * Gravity * sinTheta +
-          crr * totalMassKg * Gravity * cosTheta
-      val aero = 0.5 * AirDensity * CdA * v * v
-      (gravityAndRolling + aero) * v
-
-    var low = 0.05
-    var high = 20.0
-    var n = 0
-    while n < 80 do
-      val mid = (low + high) / 2.0
-      if requiredWheelPower(mid) <= wheelPower then low = mid
-      else high = mid
-      n += 1
-    low
-
-  def combine(estimates: Iterable[RideTimeEstimate]): RideTimeEstimate =
-    val parts = estimates.toVector
-    val thresholds =
-      parts.flatMap { estimate =>
-        estimate.powerAboveSeconds.keys ++ estimate.longestPowerStreakSeconds.keys
-      }.distinct.sorted
-    val zeroAbove = thresholds.map(_ -> 0.0).toMap
-    parts.foldLeft(
-      RideTimeEstimate(
-        totalSeconds = 0.0,
-        poweredSeconds = 0.0,
-        coastingSeconds = 0.0,
-        coastingDistanceKm = 0.0,
-        modeledDistanceKm = 0.0,
-        skippedDistanceKm = 0.0,
-        riderEnergyJ = 0.0,
-        maxRiderPowerW = 0.0,
-        powerAboveSeconds = zeroAbove,
-        leadingNonCoastSeconds = 0.0,
-        trailingNonCoastSeconds = 0.0,
-        internalNonCoastRunsSeconds = Vector.empty
-      )
-    ) { (a, b) =>
-      val combinedAbove = thresholds.map { threshold =>
-          threshold ->
-            (a.abovePowerSeconds(threshold) + b.abovePowerSeconds(threshold))
-        }.toMap
-      val aHasCoast = a.coastingSeconds > 0.5
-      val bHasCoast = b.coastingSeconds > 0.5
-      val combinedLeadingNonCoast =
-        if aHasCoast then a.leadingNonCoastSeconds
-        else a.totalSeconds + b.leadingNonCoastSeconds
-      val combinedTrailingNonCoast =
-        if bHasCoast then b.trailingNonCoastSeconds
-        else b.totalSeconds + a.trailingNonCoastSeconds
-      val combinedInternalNonCoast =
-        if aHasCoast && bHasCoast then
-          a.internalNonCoastRunsSeconds ++
-            (if a.trailingNonCoastSeconds + b.leadingNonCoastSeconds > 0.5 then
-               Vector(a.trailingNonCoastSeconds + b.leadingNonCoastSeconds)
-             else Vector.empty) ++
-            b.internalNonCoastRunsSeconds
-        else if aHasCoast then
-          a.internalNonCoastRunsSeconds
-        else if bHasCoast then
-          b.internalNonCoastRunsSeconds
-        else
-          Vector.empty
-      RideTimeEstimate(
-        totalSeconds = a.totalSeconds + b.totalSeconds,
-        poweredSeconds = a.poweredSeconds + b.poweredSeconds,
-        coastingSeconds = a.coastingSeconds + b.coastingSeconds,
-        coastingDistanceKm = a.coastingDistanceKm + b.coastingDistanceKm,
-        modeledDistanceKm = a.modeledDistanceKm + b.modeledDistanceKm,
-        skippedDistanceKm = a.skippedDistanceKm + b.skippedDistanceKm,
-        riderEnergyJ = a.riderEnergyJ + b.riderEnergyJ,
-        maxRiderPowerW = math.max(a.maxRiderPowerW, b.maxRiderPowerW),
-        powerAboveSeconds = combinedAbove,
-        leadingNonCoastSeconds = combinedLeadingNonCoast,
-        trailingNonCoastSeconds = combinedTrailingNonCoast,
-        internalNonCoastRunsSeconds = combinedInternalNonCoast,
-        longestPowerStreakSeconds =
-          thresholds.map { threshold =>
-            threshold ->
-              math.max(
-                a.longestPowerStreakSeconds.getOrElse(threshold, 0.0),
-                b.longestPowerStreakSeconds.getOrElse(threshold, 0.0)
-              )
-          }.toMap,
-        candidateComfortSpikeLoadSeconds =
-          a.candidateComfortSpikeLoadSeconds + b.candidateComfortSpikeLoadSeconds
-      )
-    }
-
-object Audit:
-  private val OverlapToleranceM = CorridorPolicy.corridorToleranceM
-
-  def run(
-      cfg: Config,
-      trails: Vector[Trail],
-      forbiddenTransferTrails: Vector[Trail],
-      finish: Trail,
-      order: Vector[Int],
-      transitions: Vector[Output.Transition],
-      outputPoints: Vector[Point]
-  ): AuditResult =
-    val warnings = mutable.ArrayBuffer.empty[String]
-    val failures = mutable.ArrayBuffer.empty[String]
-    val selected = order.map(trails)
-    val allInputTrails = trails.distinctBy(_.path)
-    val forbiddenTransferPaths = forbiddenTransferTrails.map(_.path).toSet
-    val allProtectedTrails = (allInputTrails ++ forbiddenTransferTrails).distinctBy(_.path)
-    selected.foreach { trail =>
-      val stats = Geometry.profileStats(trail.points)
-      val (forwardFound, reversedFound) =
-        Geometry.sampleMatchDirection(outputPoints, trail.points)
-      val isFinal = trail.path == finish.path
-      val direction =
-        if isFinal then "FIXED FINAL"
-        else
-          stats.netElevationM match
-            case Some(net) if net <= -5.0 => "DOWNHILL"
-            case Some(net) if net >= 5.0  => "UPHILL"
-            case Some(_)                  => "MIXED/FLAT"
-            case None                     => "NO-ELEVATION"
-      if !isFinal && direction == "UPHILL" then
-        failures += s"${trail.name}: GPX net direction is uphill"
-      else if !isFinal && direction == "MIXED/FLAT" then
-        warnings += s"${trail.name}: GPX is not clearly downhill by net elevation"
-      if !forwardFound then
-        failures += s"${trail.name}: forward occurrence was not verified in final GPX"
-      if reversedFound then
-        warnings += s"${trail.name}: reversed sample sequence also appears somewhere in final GPX"
-      if !isFinal &&
-          stats.longestClimbDistanceM >= 100.0 &&
-          stats.longestClimbAvgGradePct >= 3.0
-      then
-        warnings +=
-          f"${trail.name}: contains ${stats.longestClimbDistanceM}%.0f m sustained climb at ~${stats.longestClimbAvgGradePct}%.1f%%"
-    }
-    transitions.foreach { transition =>
-      val c = transition.connector
-      val stats = Geometry.profileStats(c.route.points)
-      val fromSnap = c.route.points.headOption
-        .map(Geometry.distanceMeters(c.route.from, _))
-        .getOrElse(Double.PositiveInfinity)
-      val toSnap = c.route.points.lastOption
-        .map(Geometry.distanceMeters(c.route.to, _))
-        .getOrElse(Double.PositiveInfinity)
-      if fromSnap > 30.0 then
-        warnings += f"${transition.label}: route starts ${fromSnap}%.0f m from requested endpoint"
-      if toSnap > 30.0 then
-        warnings += f"${transition.label}: route ends ${toSnap}%.0f m from requested endpoint"
-
-      case class AuditOverlap(trail: Trail, meters: Double, strictForbidden: Boolean)
-      val overlaps = allProtectedTrails.map { trail =>
-          AuditOverlap(
-            trail,
-            Geometry.coTravelOverlapMeters(c.route.points, trail.points, OverlapToleranceM),
-            forbiddenTransferPaths.contains(trail.path)
+  def riddenTransferSegments(ride:Gpx,trails:Vector[Trail]):Vector[RiddenTransferSegment] =
+    val occurrences=trails.indices
+      .flatMap(i=>riddenTrailOccurrence(ride,i,trails))
+      .sortBy(_.startSampleIndex)
+      .foldLeft(Vector.empty[RiddenTrailOccurrence]) { (acc,current) =>
+        if acc.lastOption.exists(previous=>current.startSampleIndex<=previous.endSampleIndex) then acc
+        else acc :+ current
+      }
+    occurrences.sliding(2).flatMap {
+      case Vector(from,to) if to.startSampleIndex>from.endSampleIndex+2 =>
+        Some(
+          RiddenTransferSegment(
+            s"${trails(from.trailIndex).name} -> ${trails(to.trailIndex).name}",
+            ride.points.slice(from.endSampleIndex,to.startSampleIndex+1)
           )
-        }.filter(_.meters >= 5.0).sortBy(o => -o.meters)
-      overlaps.foreach { overlap =>
-        if overlap.meters > CorridorPolicy.maxConnectorCoTravelM then
-          if overlap.strictForbidden then
-            failures +=
-              f"${transition.label}: connector rides forbidden transfer corridor ${overlap.trail.name} for ${overlap.meters}%.0f m"
-          else
-            failures +=
-              f"${transition.label}: connector reuses mandatory technical corridor ${overlap.trail.name} for ${overlap.meters}%.0f m"
-        else if overlap.strictForbidden then
-          warnings +=
-            f"${transition.label}: connector briefly co-travels forbidden transfer corridor ${overlap.trail.name} for ${overlap.meters}%.0f m"
-        else
-          warnings +=
-            f"${transition.label}: connector briefly co-travels mandatory technical corridor ${overlap.trail.name} for ${overlap.meters}%.0f m"
-      }
-      if stats.longestClimbDistanceM >= 150.0 && stats.longestClimbAvgGradePct >= 4.0 then
-        warnings +=
-          f"${transition.label}: long connector climb ${stats.longestClimbDistanceM}%.0f m at ~${stats.longestClimbAvgGradePct}%.1f%%"
-      if stats.maxGrade100Pct >= 8.0 then
-        warnings +=
-          f"${transition.label}: max sustained 100 m uphill grade ${stats.maxGrade100Pct}%.1f%%"
-      val edges = c.traceEdges
-      require(
-        edges.nonEmpty,
-        s"${transition.label}: selected connector lost required cached trace edge evidence"
-      )
-      val badUses = edges.filter(e => Set("steps", "ferry", "rail-ferry", "rail")(e.use))
-      val badSurfaces = edges.filter(_.surface == "impassable")
-      val majorRoads = edges.filter(e => Set("motorway", "trunk", "primary")(e.roadClass))
-      def cycleLaneKind(e: TraceEdge): String =
-        e.cycleLane.trim.toLowerCase match
-          case "" | "no" | "unknown" | "false" => "none"
-          case other                            => other
-
-      val primaryNoCycle = edges.filter(e => e.roadClass == "primary" && cycleLaneKind(e) == "none")
-      val primaryShared = edges.filter(e => e.roadClass == "primary" && cycleLaneKind(e) == "shared")
-      if badUses.nonEmpty then
-        failures +=
-          s"${transition.label}: edge audit contains ${badUses.map(_.use).distinct.mkString(", ")}"
-      if badSurfaces.nonEmpty then
-        failures += s"${transition.label}: edge audit contains impassable surface"
-      if majorRoads.exists(e => Set("motorway", "trunk")(e.roadClass)) then
-        failures += s"${transition.label}: connector uses motorway/trunk edge"
-      else if primaryNoCycle.nonEmpty || primaryShared.nonEmpty then
-        warnings +=
-          s"${transition.label}: connector uses primary-road edge without dedicated/separated cycle facility"
-    }
-    val startGap = outputPoints.headOption
-      .map(Geometry.distanceMeters(cfg.start, _))
-      .getOrElse(Double.PositiveInfinity)
-    val endGap = outputPoints.lastOption
-      .map(Geometry.distanceMeters(finish.end, _))
-      .getOrElse(Double.PositiveInfinity)
-    val actualMaxGap = Geometry.profileStats(outputPoints).maxPointGapM
-    if startGap > 5.0 then
-      failures += f"Output GPX starts ${startGap}%.1f m away from requested START"
-    if endGap > 5.0 then
-      failures += f"Output GPX ends ${endGap}%.1f m away from requested ${finish.name} point"
-    if actualMaxGap >= 250.0 then
-      failures +=
-        f"Output GPX has a ${actualMaxGap}%.1f m consecutive point gap (>=250 m data-quality limit)"
-    else if actualMaxGap >= 100.0 then
-      warnings +=
-        f"Output GPX has a ${actualMaxGap}%.1f m consecutive point gap; inspect sparse technical geometry"
-    AuditResult(warnings = warnings.toVector.distinct, failures = failures.toVector.distinct)
-
-object Output:
-  case class Transition(label: String, connector: Connector)
-
-  def assemble(
-      cfg: Config,
-      trails: Vector[Trail],
-      startLabel: String,
-      finish: Trail,
-      matrix: Matrix,
-      order: Vector[Int]
-  ): (Vector[Point], Vector[Transition]) =
-    val points = mutable.ArrayBuffer.empty[Point]
-    val transitions = mutable.ArrayBuffer.empty[Transition]
-
-    def append(chunk: Vector[Point]): Unit =
-      val merged = Geometry.appendDistinct(points.toVector, chunk)
-      points.clear()
-      points ++= merged
-    if order.isEmpty then
-      val c = matrix.startToFinish.getOrElse(sys.error("Missing endpoint-only connector"))
-      append(Vector(c.route.from))
-      transitions += Transition(s"$startLabel -> ${finish.name}", c)
-      append(c.route.points)
-    else
-      val first = order.head
-      val firstConnector = matrix.startToTrail(first).getOrElse(sys.error("Missing endpoint -> first connector"))
-      append(Vector(firstConnector.route.from))
-      transitions += Transition(s"$startLabel -> ${trails(first).name}", firstConnector)
-      append(firstConnector.route.points)
-      append(trails(first).points)
-      order.sliding(2).foreach {
-        case Vector(a, b) =>
-          val c = matrix.between(a)(b).getOrElse {
-            sys.error(s"Missing connector ${trails(a).name} -> ${trails(b).name}")
-          }
-          transitions += Transition(s"${trails(a).name} -> ${trails(b).name}", c)
-          append(c.route.points)
-          append(trails(b).points)
-        case _ =>
-      }
-      val last = order.last
-      val finalConnector = matrix.trailToFinish(last).getOrElse(sys.error(s"Missing last -> ${finish.name} connector"))
-      transitions += Transition(s"${trails(last).name} -> ${finish.name}", finalConnector)
-      append(finalConnector.route.points)
-    (points.toVector, transitions.toVector)
-
-  def withVariantSuffix(path: Path, suffix: String): Path =
-    if suffix.isEmpty then path
-    else
-      val name = path.getFileName.toString
-      val dot = name.lastIndexOf('.')
-      val variantName =
-        if dot > 0 then name.substring(0, dot) + suffix + name.substring(dot)
-        else name + suffix
-      val parent = Option(path.getParent).getOrElse(Path.of("."))
-      parent.resolve(variantName)
-
-  def defaultDebugReportPath(report: Path): Path =
-    val name = report.getFileName.toString
-    val base =
-      if name.toLowerCase.endsWith(".txt") then name.dropRight(4)
-      else name
-    val parent = Option(report.getParent).getOrElse(Path.of("."))
-    parent.resolve(base + ".debug.txt")
-
-
-  def defaultReportPath(out: Path): Path =
-    val name = out.getFileName.toString
-    val base =
-      if name.toLowerCase.endsWith(".gpx") then name.dropRight(4)
-      else name
-    val parent = Option(out.getParent).getOrElse(Path.of("."))
-    parent.resolve(base + ".txt")
-
-
-object OldContractTests:
-  case class Summary(passed: Int, failed: Int)
-
-  private def assertT(condition: Boolean, message: => String = "assertion failed"): Unit =
-    if !condition then throw new AssertionError(message)
-
-  private def near(a: Double, b: Double, tolerance: Double): Unit =
-    assertT(math.abs(a - b) <= tolerance, f"$a%.6f != $b%.6f within $tolerance%.6f")
-
-  def run(): Summary =
-    var passed = 0
-    var failed = 0
-
-    def test(name: String)(body: => Unit): Unit =
-      try
-        body
-        passed += 1
-        println(s"PASS contract: $name")
-      catch
-        case e: Throwable =>
-          failed += 1
-          println(s"FAIL contract: $name: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}")
-
-    val origin = Point(53.0, 10.0, None)
-    val earthR = 6371000.0
-    val cos0 = math.cos(math.toRadians(origin.lat))
-    def metres(x: Double, y: Double): Point =
-      Point(
-        origin.lat + math.toDegrees(y / earthR),
-        origin.lon + math.toDegrees(x / (earthR * cos0)),
-        None
-      )
-
-    test("protected corridor parallel/reverse") {
-      val corridor = Vector(metres(-20, 0), metres(50, 0))
-      val forward = Vector(metres(0, 0), metres(30, 0))
-      val reverse = forward.reverse
-      val a = Geometry.coTravelOverlapMeters(forward, corridor, 12.0)
-      val b = Geometry.coTravelOverlapMeters(reverse, corridor, 12.0)
-      assertT(a > 29.0, s"parallel overlap=$a")
-      near(a, b, 0.05)
-    }
-
-    test("protected corridor crossing ignored") {
-      val corridor = Vector(metres(-20, 0), metres(50, 0))
-      val perpendicular = Vector(metres(10, -20), metres(10, 20))
-      val oblique = Vector(metres(-2, -14), metres(26, 14))
-      assertT(Geometry.coTravelOverlapMeters(perpendicular, corridor, 12.0) < 1e-6)
-      assertT(Geometry.coTravelOverlapMeters(oblique, corridor, 12.0) < 1e-6)
-    }
-
-    test("protected corridor 12m boundary") {
-      val corridor = Vector(metres(-20, 0), metres(50, 0))
-      val outside = Vector(metres(0, 12.1), metres(30, 12.1))
-      val inside = Vector(metres(0, 11.9), metres(30, 11.9))
-      assertT(Geometry.coTravelOverlapMeters(outside, corridor, 12.0) < 1e-6)
-      assertT(Geometry.coTravelOverlapMeters(inside, corridor, 12.0) > 29.0)
-    }
-
-    test("protected corridor blocker is interior") {
-      val corridor = Vector(metres(-20, 0), metres(50, 0))
-      val route = Vector(metres(0, 6), metres(30, 6))
-      val blocker = Geometry.coTravelBlockPoint(route, corridor, 12.0, route.head, route.last)
-      assertT(blocker.nonEmpty)
-      val depth = math.min(
-        Geometry.distanceMeters(blocker.get, route.head),
-        Geometry.distanceMeters(blocker.get, route.last)
-      )
-      assertT(depth > 5.0, s"blocker depth=$depth")
-    }
-
-    test("corridor rectangle intersection stays empty") {
-      // Regression for the FIX26 bug: max(lower bounds) > min(upper bounds)
-      // must remain an empty intersection rather than being re-ordered by add().
-      val route = Vector(
-        metres(0, 0), metres(10, -20), metres(-20, -50),
-        metres(-15, -50), metres(-5, -70)
-      )
-      val corridor = Vector(
-        metres(0, 0), metres(-5, 5), metres(15, 0),
-        metres(5, 30), metres(25, 60)
-      )
-      val overlap = Geometry.coTravelOverlapMeters(route, corridor, 12.0)
-      assertT(overlap < 1e-6, f"false-positive overlap=$overlap%.3fm")
-    }
-
-    test("exact blocker accumulation is monotone") {
-      val a = metres(1, 1)
-      val b = metres(2, 2)
-      val first = Geometry.appendExactDistinctPoints(Vector.empty, Vector(a))
-      val second = Geometry.appendExactDistinctPoints(first, Vector(a, b))
-      assertT(first == Vector(a))
-      assertT(second == Vector(a, b))
-    }
-
-    val summary = Summary(passed, failed)
-    println(s"CONTRACT TESTS: ${summary.passed} passed, ${summary.failed} failed")
-    summary
-
-@main def main(args: String*): Unit =
-  val timingRunStartedNs = System.nanoTime()
-
-  def timingSeconds(fromNs: Long, toNs: Long): Double =
-    (toNs - fromNs).toDouble / 1e9
-
-  val cfg = Cli.parse(args) match
-    case Right(Some(value)) => value
-    case Right(None)        => return
-    case Left(message) =>
-      Console.err.println(s"Error: $message")
-      return
-
-  if cfg.runTests then
-    val contract = OldContractTests.run()
-    if contract.failed > 0 then
-      Console.err.println(s"ERROR: ${contract.failed} contract test(s) failed")
-      return
-  else
-    println("CONTRACT TESTS: skipped (--no-test)")
-
-  println(s"Planner build: ${BuildInfo.id}")
-  println("PRODUCT TARGET: three natural rider day variants (two LOOP + one P2P); wall ceilings may repeat; every technical GPX remains mandatory independently.")
-  println()
-
-  val endpoint1 = cfg.start
-
-  val endpoint2 = cfg.finish
-
-  val endpointPoints = Vector(endpoint1, endpoint2)
-
-  val endpointNames = Vector(cfg.startName, cfg.finishName)
-
-  def endpointNumber(point: Point): Int =
-    val distances =
-      endpointPoints.map { endpoint =>
-          Geometry.distanceMeters(point, endpoint)
-      }
-    distances.zipWithIndex.minBy(
-      _._1
-    )._2 + 1
-
-  def endpointName(point: Point): String =
-    endpointNames(endpointNumber(point) - 1)
-
-  def endpointTrail(number: Int, point: Point, name: String): Trail =
-    Trail(
-      path =
-        Path.of(
-          s"__endpoint_${number}__"
-        ),
-      name = name,
-      points = Vector(point)
-    )
-
-  val endpointTrail1 = endpointTrail(1, endpoint1, cfg.startName)
-
-  val endpointTrail2 = endpointTrail(2, endpoint2, cfg.finishName)
-
-  val baseReportPath = cfg.report.getOrElse(Output.defaultReportPath(cfg.out))
-
-  val debugPath = Output.defaultDebugReportPath(baseReportPath)
-
-
-  // Rider-facing output names are fixed product slots: cfg.out is C1,
-  // while C2/C3 use wall suffixes.
-  val wallC2GpxPath = Output.withVariantSuffix(cfg.out, ".wall-c2")
-
-  val wallC3GpxPath = Output.withVariantSuffix(cfg.out, ".wall-c3")
-
-  val generatedOutputPaths =
-    Set(
-      cfg.out,
-      wallC2GpxPath,
-      wallC3GpxPath
-    ).map(_.toAbsolutePath.normalize)
-
-  val expanded = Inputs.expand(cfg.inputs)
-
-  val realRidePaths = RealRideGpx.defaultPaths()
-
-  val forbiddenTransferPaths = ForbiddenTransferInputs.defaultPaths()
-
-  val realRidePathSet =
-    realRidePaths.map(
-      _.toAbsolutePath.normalize
-    ).toSet
-
-  val forbiddenTransferPathSet =
-    forbiddenTransferPaths.map(
-      _.toAbsolutePath.normalize
-    ).toSet
-
-  val ordinaryPaths = expanded.filterNot { p =>
-      val normalized = p.toAbsolutePath.normalize
-      generatedOutputPaths.contains(
-        normalized
-      ) ||
-        realRidePathSet.contains(
-          normalized
-        ) ||
-        forbiddenTransferPathSet.contains(normalized)
-    }
-
-  val rawTrails = ordinaryPaths.map(Gpx.read)
-
-  // Every technical GPX is an independent mandatory trail. Shared geometry
-  // is reported and validated, but never changes which input GPXs must be ridden.
-  val sourceTrails = rawTrails
-
-  val trails = sourceTrails
-
-  val trailCount = trails.size
-
-  val forbiddenTransferTrails = forbiddenTransferPaths.map(Gpx.read)
-
-  // Real-ride evidence changes production wall severity, so it must not
-  // disappear silently. Until this is replaced by a versioned precomputed
-  // evidence artifact, the current production contract requires the dual-
-  // recording trails/real set to be present and every discovered GPX readable.
-  require(
-    realRidePaths.size >= 2,
-    s"Safety-active real-ride evidence requires >=2 trails/real/*.gpx recordings; found ${realRidePaths.size}."
-  )
-
-  val realRides = realRidePaths.map { path =>
-      try
-        RealRideGpx.read(path)
-      catch
-        case e: Exception =>
-          throw new IllegalArgumentException(
-            s"Safety-active real-ride evidence GPX is unreadable: $path: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}",
-            e
-          )
-    }
-  println(
-    s"Real-ride evidence: ${realRides.size}/${realRidePaths.size} required GPX(s) validated from trails/real/; " +
-      s"${realRides.map(_.samples.map(_.segmentIndex).distinct.size).sum} continuity segment(s); " +
-      "these are safety-active evidence only, not mandatory technical trails."
-  )
-  println()
-
-  if forbiddenTransferTrails.nonEmpty then
-    println(
-      s"Forbidden transfer corridors: ${forbiddenTransferTrails.size} GPX(s) from trails/avoid/; " +
-        "these are never mandatory ride trails and connectors are rerouted away from their full geometry."
-    )
-    forbiddenTransferTrails.foreach { trail =>
-      println(
-        s"  AVOID: ${trail.name} (${trail.path})"
-      )
-    }
-    println()
-  require(trails.nonEmpty, "No technical GPX trails found.")
-  require(
-    trails.size <= 30,
-    s"Exact bit-mask search currently supports at most 30 mandatory GPXs; found ${trails.size}."
-  )
-
-  val CanonicalMaxPointGapM = 10.0
-  trails.foreach { trail =>
-    val gap =
-      Geometry.profileStats(
-        trail.points
-      ).maxPointGapM
-    require(
-      gap <= CanonicalMaxPointGapM + 1e-9,
-      f"Production technical GPX violates canonical geometry contract: ${trail.name}%s max point gap=$gap%.1f m, required <=$CanonicalMaxPointGapM%.1f m."
-    )
-  }
-  println(
-    s"${cfg.startName}: ${Format.point(endpoint1)}"
-  )
-  println(
-    s"${cfg.finishName}: ${Format.point(endpoint2)}"
-  )
-  println(
-    s"Allowed endpoint modes: ${cfg.startName}->${cfg.startName}, ${cfg.startName}->${cfg.finishName}, ${cfg.finishName}->${cfg.startName}, ${cfg.finishName}->${cfg.finishName}"
-  )
-  println(
-    s"Technical trails: ${trails.size}"
-  )
-  println(
-    f"Mandatory input contract: directory expansion is non-recursive; GPX endpoints are exact connector join boundaries; full mandatory geometry is protected; max point gap <=$CanonicalMaxPointGapM%.1f m."
-  )
-  trails.zipWithIndex.foreach {
-    case (trail, idx) =>
-      println(
-        f"  ${idx + 1}%2d. ${trail.name}%-32s " +
-          s"${Format.point(trail.start)} -> ${Format.point(trail.end)}"
-      )
-  }
-  println()
-
-  val valhalla = Valhalla(cfg.valhalla, cfg.profile, cfg.physicsSampleM)
-
-  val fingerprint = valhalla.statusFingerprint()
-  println(s"Valhalla: $fingerprint")
-
-  // Mandatory trails and explicit transfer-avoid corridors are different
-  // product concepts:
-  //   trails/*.gpx       = must ride
-  //   trails/avoid/*.gpx = must NOT be used as connector corridors
-  //
-  // Both are protected from connector reuse, but only the first set enters the
-  // all-trails solver.
-  val safetyReservedTrails =
-    (
-      trails ++
-        forbiddenTransferTrails
-    ).distinctBy(_.path)
-  println()
-  println()
-
-  val cache = RouteCache()
-
-  val matrixPoint1 =
-    MatrixBuilder.build(
-      endpoint1,
-      trails,
-      endpointTrail1,
-      cache,
-      valhalla,
-      cfg,
-      safetyReservedTrails,
-      forbiddenTransferTrails
-    )
-
-  val matrixPoint2 =
-    MatrixBuilder.build(
-      endpoint2,
-      trails,
-      endpointTrail2,
-      cache,
-      valhalla,
-      cfg,
-      safetyReservedTrails,
-      forbiddenTransferTrails,
-      buildBetween = false
-    )
-
-  def flattenedSearchVariants(connector: Connector): Vector[Connector] =
-    if connector.searchConnectorVariants.nonEmpty then connector.searchConnectorVariants
-    else Vector(connector)
-
-  def mergeEndpointChoices(a: Option[Connector], b: Option[Connector]): Option[Connector] =
-    val candidates =
-      (
-        a.toVector.flatMap(
-          flattenedSearchVariants
-        ) ++
-          b.toVector.flatMap(flattenedSearchVariants)
-      ).sortBy { connector =>
-        (
-          connector.physicsSeconds,
-          connector.candidateComfortPenaltySeconds,
-          connector.transferQualityPenaltySeconds,
-          connector.fatiguePenaltySeconds,
-          connector.pathFraction
         )
-      }
-    candidates.headOption.map { best =>
-      best.copy(searchConnectorVariants = candidates)
-    }
-
-  val matrix =
-    Matrix(
-      startToTrail =
-        trails.indices.map(
-          i =>
-            mergeEndpointChoices(matrixPoint1.startToTrail(i), matrixPoint2.startToTrail(i))
-        ).toVector,
-      between = matrixPoint1.between,
-      trailToFinish =
-        trails.indices.map(
-          i =>
-            mergeEndpointChoices(matrixPoint1.trailToFinish(i), matrixPoint2.trailToFinish(i))
-        ).toVector,
-      startToFinish = None
-    )
-
-  val timingMatrixReadyNs = System.nanoTime()
-  println(
-    s"[1/4 100.0%] Connector matrix complete: start and end independently choose ${cfg.startName} or ${cfg.finishName}."
-  )
-  println(
-    s"Explicit /avoid runtime audit: loaded=${forbiddenTransferTrails.size}"
-  )
-  if forbiddenTransferTrails.nonEmpty then
-    println(
-      "  strict /avoid rerouting uses blocker points taken from the actual connector geometry that violated the hard co-travel audit; no raw-coordinate junction inference or fixed endpoint-clearance radius is used; sustained co-travel >12 m is FAIL."
-    )
-  println()
-
-  def writeText(path: Path, content: String): Unit =
-    Option(
-      path.getParent
-    ).foreach { p =>
-        Files.createDirectories(p)
-    }
-    Files.writeString(path, content, StandardCharsets.UTF_8)
-
-  def writeEarlyFailureReports(reason: String, phase: String): Unit =
-    val summary = new StringBuilder
-    summary.append(
-      "TRAIL-PLAN — NO RIDER GPX PRODUCED\n" +
-        "===================================\n\n" +
-        s"Planner build: ${BuildInfo.id}\n" +
-        s"Phase: $phase\n" +
-        s"Reason: $reason\n\n" +
-        "No day GPX was written because the all-mandatory-trails route is incomplete. " +
-        "This report and the deep diagnostic are intentionally written even on failure so every run leaves something concrete to test/debug.\n\n" +
-        s"Mandatory technical GPXs: $trailCount.\n" +
-        s"Explicit trails/avoid: loaded=${forbiddenTransferTrails.size}\n\n" +
-        "REACHABILITY SUMMARY\n" +
-        "--------------------\n"
-    )
-    trails.indices.foreach { i =>
-      val starts = matrix.startToTrail(i).size
-      val inbound = trails.indices.filter(_ != i).map(j => matrix.between(j)(i).size).sum
-      val outbound = trails.indices.filter(_ != i).map(j => matrix.between(i)(j).size).sum
-      val ends = matrix.trailToFinish(i).size
-      summary.append(
-        f"${trails(i).name}%-32s start=$starts%3d inbound=$inbound%4d outbound=$outbound%4d end=$ends%3d\n"
-      )
-    }
-    summary.append(
-      "\nNext action: inspect day.debug.txt. Zero inbound usually means a target-entry topology/safety cut; zero outbound means an exit cut.\n"
-    )
-    val deep = new StringBuilder
-    deep.append(summary.result())
-    deep.append("\n")
-    deep.append(
-      "\nTARGET-START PROXIMITY FOR UNREACHABLE ENTRIES\n" +
-        "----------------------------------------------\n"
-    )
-    trails.indices.foreach { i =>
-      val starts = matrix.startToTrail(i).size
-      val inbound = trails.indices.filter(_ != i).map(j => matrix.between(j)(i).size).sum
-      if starts == 0 || inbound == 0 then
-        val target = trails(i)
-        deep.append(s"${target.name}:\n")
-        trails.indices
-          .filter(_ != i)
-          .flatMap { j =>
-            Geometry.projectToPolyline(target.start, trails(j).points)
-              .map(p => (trails(j).name, p.alongM, p.lateralM))
-          }
-          .sortBy(_._3)
-          .take(6)
-          .foreach { case (name, alongM, lateralM) =>
-            val mark =
-              if lateralM <= CorridorPolicy.corridorToleranceM then
-                " [near mandatory geometry; no synthetic topology rescue is used]"
-              else
-                ""
-            deep.append(f"  $name%-32s lateral=$lateralM%6.1f m | along-from-parent-start=$alongM%7.1f m$mark%s\n")
-          }
-        forbiddenTransferTrails
-          .flatMap { t =>
-            Geometry.projectToPolyline(target.start, t.points)
-              .map(p => (t.name, p.alongM, p.lateralM))
-          }
-          .sortBy(_._3)
-          .take(6)
-          .foreach { case (name, alongM, lateralM) =>
-            val mark =
-              if lateralM <= 6.0 then
-                " [near protected /avoid geometry; route-derived blockers are used only after an actual >12 m violation]"
-              else if lateralM <= 12.0 then
-                " [NEAR AVOID; proximity alone is allowed, sustained co-travel is forbidden]"
-              else
-                ""
-            deep.append(f"  AVOID $name%-26s lateral=$lateralM%6.1f m | along=$alongM%7.1f m$mark%s\n")
-          }
-        deep.append("\n")
-    }
-    writeText(baseReportPath, summary.result())
-    writeText(debugPath, deep.result())
-    Console.err.println(
-      s"Failure reports written: ${baseReportPath.toAbsolutePath.normalize} and ${debugPath.toAbsolutePath.normalize}"
-    )
-
-  def inboundCount(i: Int): Int =
-    matrix.startToTrail(i).size +
-      trails.indices.count(
-        j =>
-          j != i &&
-            matrix.between(j)(i).nonEmpty
-      )
-
-  def outboundCount(i: Int): Int =
-    matrix.trailToFinish(i).size +
-      trails.indices.count(
-        j =>
-          j != i &&
-            matrix.between(i)(j).nonEmpty
-      )
-
-  val reachabilityNotes = trails.indices
-      .filter { i =>
-          inboundCount(i) == 0 ||
-            outboundCount(i) == 0
-      }
-      .map { i =>
-        s"${trails(i).name}: inbound=${inboundCount(i)}, outbound=${outboundCount(i)}"
-      }
-      .toVector
-
-  if reachabilityNotes.nonEmpty then
-    println("Reachability notes:")
-    reachabilityNotes.foreach { x =>
-        println(s"  $x")
-    }
-    println()
-
-  // Canonical technical GPX contract:
-  // every mandatory technical GPX already contains the exact geometry and
-  // elevation profile used for rider physics. No runtime source arbitration,
-  // Valhalla elevation fallback or endpoint reanchoring remains here.
-  trails.foreach { trail =>
-    require(
-      trail.points.forall(
-        _.ele.isDefined
-      ),
-      s"Production technical GPX must contain canonical <ele> on every point: ${trail.path}"
-    )
-  }
-  println(
-    s"[2/4 0.0%] Using canonical GPX geometry/elevation directly for ${trails.size} trail(s)."
-  )
-
-  val technicalTrailPoints = trails.zipWithIndex.map { case (trail, idx) =>
-      val pct = 80.0 * (idx + 1).toDouble / math.max(1, trails.size).toDouble
-      println(
-        f"[2/4 $pct%5.1f%%] canonical elevation ${idx + 1}%d/${trails.size}%d ${trail.name}%s"
-      )
-      trail.points
-    }
-  println(
-    s"Technical trail elevation source: production canonical GPX <ele> (${trails.size}/${trails.size})."
-  )
-  println()
-
-  val technicalTrailTimes = technicalTrailPoints.map { points =>
-      RidePhysics.estimate(
-        points,
-        cfg,
-        downhillCapKph = Some(cfg.downhillMaxKph)
-      )
-    }
-
-  val technicalTrailStats = technicalTrailPoints.map(Geometry.profileStats)
-
-  val technicalTrailSinuosity =
-    trails.map { trail =>
-        Geometry.sinuosity(trail.points)
-    }
-
-  val technicalTrailNetDescentPct = technicalTrailStats.map { stats =>
-      if stats.lengthM <= 1e-9 then 0.0
-      else stats.netElevationM
-          .map { net =>
-              math.max(
-                0.0,
-                -net
-              ) /
-                stats.lengthM *
-                100.0
-          }
-          .getOrElse(0.0)
-    }
-
-  val technicalTrailLateAscentM =
-    technicalTrailPoints.map { points =>
-        Geometry.exponentiallyWeightedAscentNearEnd(points, cfg.arrivalWindowM)
-    }
-
-  case class LocalSteepTwistyHit(centerM: Double, netDescentPct: Double, sinuosity: Double, ruleName: String):
-    def severity: Double =
-      val descentThreshold =
-        if ruleName == "60m" then RidePhysics.NoviceSteepTwistyLocalShortMinNetDescentPct
-        else RidePhysics.NoviceSteepTwistyLocalLongMinNetDescentPct
-      math.min(
-        netDescentPct /
-          descentThreshold,
-        sinuosity /
-          RidePhysics.NoviceSteepTwistyLocalMinSinuosity
-      )
-
-  val technicalTrailLocalShortWindows =
-    technicalTrailPoints.map { points =>
-        Geometry.descentSinuosityWindows(
-          points,
-          RidePhysics.NoviceSteepTwistyLocalShortWindowM,
-          RidePhysics.NoviceSteepTwistyLocalShortMinNetDescentPct,
-          RidePhysics.NoviceSteepTwistyLocalMinSinuosity
-        )
-    }
-
-  val technicalTrailLocalLongWindows =
-    technicalTrailPoints.map { points =>
-        Geometry.descentSinuosityWindows(
-          points,
-          RidePhysics.NoviceSteepTwistyLocalLongWindowM,
-          RidePhysics.NoviceSteepTwistyLocalLongMinNetDescentPct,
-          RidePhysics.NoviceSteepTwistyLocalMinSinuosity
-        )
-    }
-
-  val technicalTrailLocalSteepTwistyHit = trails.indices.map { i =>
-      val shortHits = technicalTrailLocalShortWindows(i)
-          .filter { window =>
-            window.netDescentPct >= RidePhysics.NoviceSteepTwistyLocalShortMinNetDescentPct &&
-              window.sinuosity >= RidePhysics.NoviceSteepTwistyLocalMinSinuosity
-          }
-          .map { window =>
-            LocalSteepTwistyHit(window.centerM, window.netDescentPct, window.sinuosity, "60m")
-          }
-      val longHits = technicalTrailLocalLongWindows(i)
-          .filter { window =>
-            window.netDescentPct >= RidePhysics.NoviceSteepTwistyLocalLongMinNetDescentPct &&
-              window.sinuosity >= RidePhysics.NoviceSteepTwistyLocalMinSinuosity
-          }
-          .map { window =>
-            LocalSteepTwistyHit(window.centerM, window.netDescentPct, window.sinuosity, "100m")
-          }
-      (shortHits ++ longHits)
-        .sortBy(
-          hit =>
-            (-hit.severity, -hit.netDescentPct, -hit.sinuosity, hit.centerM)
-        )
-        .headOption
+      case _ => None
     }.toVector
-
-  val noviceSteepTwistyWholeIndices = trails.indices
-      .filter { i =>
-        technicalTrailNetDescentPct(i) >= RidePhysics.NoviceSteepTwistyMinNetDescentPct &&
-        technicalTrailSinuosity(i) >= RidePhysics.NoviceSteepTwistyMinSinuosity
-      }
-      .toSet
-
-  val noviceSteepTwistyLocalIndices = trails.indices
-      .filter { i =>
-          technicalTrailLocalSteepTwistyHit(i).nonEmpty
-      }
-      .toSet
-
-  // Every GPX remains mandatory. Whole-trail or strong local 60/100 m
-  // evidence marks a trail as demanding; ordering later inserts recovery
-  // separators instead of dropping it.
-  val noviceSteepTwistyIndices = noviceSteepTwistyWholeIndices |
-      noviceSteepTwistyLocalIndices
-
-  // Every GPX is independent, so demanding/recovery classification is based
-  // only on that trail's own geometry/elevation model. No sibling-based
-  // inheritance or difficulty-tier substitution exists.
-  val effectiveSteepTwistyIndices = noviceSteepTwistyIndices
-
-  // ---------------------------------------------------------------------
-  // Wall classes + compact all-trails Held-Karp
-  //
-  // Ordering still uses (visited subset mask, last ridden trail), but the
-  // rider-facing solver below no longer keeps an open Pareto frontier there.
-  // Connector alternatives remain available and are cached once before the
-  // three wall-ceiling solves.
-  // ---------------------------------------------------------------------
-
-  case class ClimbShape(valuesM: Vector[Double], maxAscentM: Double, upwardViolationM: Double, roughnessM: Double, totalAscentM: Double):
-    def lastAscentM: Option[Double] =
-      valuesM.lastOption
-
-    def lastDeltaM: Option[Double] =
-      if valuesM.size >= 2 then
-        Some(
-          valuesM.last -
-            valuesM(valuesM.size - 2)
-        )
-      else
-        None
-
-  // Keep these as ordinary local defs rather than a local companion object.
-  // Scala 3/GraalVM can recursively initialize a local companion accessor here,
-  // which was the source of the previous StackOverflowError.
-  def emptyClimbShape: ClimbShape =
-    ClimbShape(valuesM = Vector.empty, maxAscentM = 0.0, upwardViolationM = 0.0, roughnessM = 0.0, totalAscentM = 0.0)
-
-  def appendClimbShape(base: ClimbShape, ascentM: Double): ClimbShape =
-    val ascent = math.max(0.0, ascentM)
-    val previous = base.lastAscentM
-    val delta =
-      previous.map { p =>
-          ascent - p
-      }
-    val addedUpwardViolation =
-      previous.map(
-        p =>
-          math.max(0.0, ascent - p)
-      ).getOrElse(0.0)
-    val addedRoughness =
-      (
-        base.lastDeltaM,
-        delta
-      ) match
-        case (Some(prevDelta), Some(nextDelta)) =>
-          math.abs(nextDelta - prevDelta)
-        case _ =>
-          0.0
-    ClimbShape(
-      valuesM =
-        base.valuesM :+
-          ascent,
-      maxAscentM =
-        math.max(
-          base.maxAscentM,
-          ascent
-        ),
-      upwardViolationM =
-        base.upwardViolationM +
-          addedUpwardViolation,
-      roughnessM =
-        base.roughnessM +
-          addedRoughness,
-      totalAscentM =
-        base.totalAscentM +
-          ascent
-    )
-
-  case class MultiLabelRoute(
-      mask: Int,
-      order: Vector[Int],
-      connectors: Vector[Connector],
-      movingSeconds: Double,
-      candidateComfortSufferingSeconds: Double,
-      candidateLongestLowSeconds: Double,
-      candidateLongestHighSeconds: Double,
-      candidateSpikeLoadSeconds: Double,
-      downhillHandlingSeconds: Double,
-      roadStressSeconds: Double,
-      recoveryBurdenSeconds: Double,
-      pathBurdenSeconds: Double,
-      maxConnectorGrade100Pct: Double,
-      maxRiderPowerW: Double,
-      maxWallClass: Int,
-      climbShape: ClimbShape,
-      trailLateAscentBurden: Double
-  )
-
-  def connectorAbovePowerSeconds(connector: Connector, thresholdW: Int): Double =
-    connector.powerAboveSecondsByThreshold.getOrElse(thresholdW, 0.0)
-
-  def connectorLongestPowerStreakSeconds(
-      connector: Connector,
-      thresholdW: Int
-  ): Double =
-    connector.longestPowerStreakSecondsByThreshold.getOrElse(thresholdW, 0.0)
-
-  def connectorCandidateLongestLow(connector: Connector): Double =
-    val threshold =
-      PowerPolicy.candidateStopStreakThresholdsW(cfg.riderPowerW).head
-    connectorLongestPowerStreakSeconds(connector, threshold)
-
-  def connectorCandidateLongestHigh(connector: Connector): Double =
-    val threshold =
-      PowerPolicy.candidateStopStreakThresholdsW(cfg.riderPowerW).last
-    connectorLongestPowerStreakSeconds(connector, threshold)
-
-  // Production road stress means traffic exposure without a dedicated or
-  // separated bicycle facility:
-  //   - motorway/trunk;
-  //   - primary: no cycle lane OR only "shared";
-  //   - secondary: no cycle lane OR only "shared".
-  //
-  // A Valhalla "shared" cycle lane is intentionally not promoted to the safe
-  // bucket: it is below dedicated/separated in Valhalla's own lane hierarchy
-  // and can represent shared-lane / share-busway semantics.
-  //
-  // V4-10 still does not add a new hard road ban. It corrects the meaning of
-  // the road signal first so the next safety decision is based on the right
-  // exposure.
-  def connectorRoadStress(connector: Connector): Double =
-    connector.motorwayTrunkSeconds +
-      connector.primaryNoCycleSeconds +
-      connector.primarySharedSeconds +
-      connector.secondaryNoCycleSeconds +
-      connector.secondarySharedSeconds
-
-  // Brief road crossings remain possible. What is hard-rejected is a
-  // sustained exposure on a primary road without a dedicated/separated
-  // bicycle facility. This is a product safety ceiling, not an optimizer
-  // weight: the user should not have to trade several continuous minutes in
-  // primary-road traffic for a prettier climb sequence.
-  val MaxLowProtectionPrimaryStreakSeconds = 120.0
-
-  def connectorRoadForbidden(connector: Connector): Boolean =
-    connector.hasMotorwayTrunk ||
-      connector.longestLowProtectionPrimarySeconds >= MaxLowProtectionPrimaryStreakSeconds
-
-  // Transfer downhill geometry is descriptive / soft only.
-  // Explicit trails/avoid/*.gpx defines forbidden technical transfer corridors.
-  // Generic dirt/path downhill remains available and downhillHandlingSeconds is
-  // retained only as a late deterministic tie-break / rider diagnostic.
-
-  // Wall difficulty has two deliberately separate layers:
-  //
-  // 1) ABSOLUTE HARD REJECT. This is the only permanent wall threshold. A
-  //    connector at/above this envelope is not offered at all.
-  // 2) RIDER-FACING C1/C2/C3 CEILINGS. These are discovered later from the
-  //    locally useful connector variants in THIS matrix. Similar climbs are
-  //    grouped by normalized severity, and the lightest ceiling is anchored
-  //    at the first group that can still connect every mandatory trail.
-  //
-  // This fixes the previous semantic mistake where C1/C2/C3 themselves were
-  // frozen global constants. The user-facing tiers now exist because they
-  // actually gate useful transfers in the current ride.
-  val ForbiddenWallGrade30Pct = 27.0
-  val ForbiddenWallGrade100Pct = 20.0
-  val ForbiddenWallMinAbove180Seconds =
-    PowerPolicy.SafetyWallMinStreakSeconds
-
-  val MaxOfferedWallClass = 3
-
-  // Similarity tolerance only. This is NOT a rider difficulty boundary.
-  // Severity is normalized to the permanent FORBIDDEN envelope, so 0.04 means
-  // four percentage-points of that envelope. Groups are width-limited from
-  // their first member, preventing chain-merging across a long dense range.
-  val WallSeverityMergeEps = 0.04
-
-  def connectorForbidden(connector: Connector): Boolean =
-    connector.maxGrade30Pct >= ForbiddenWallGrade30Pct ||
-      connector.maxGrade100Pct >= ForbiddenWallGrade100Pct ||
-      connectorLongestPowerStreakSeconds(
-        connector,
-        PowerPolicy.SafetyWallPowerW
-      ) >= ForbiddenWallMinAbove180Seconds
-
-  def finiteNonNegative(x: Double): Double =
-    if Format.finite(x) then math.max(0.0, x)
-    else 0.0
-
-  // One scalar is needed only to ORDER wall severity and group similar useful
-  // connectors. Each physical signal is normalized by the same absolute hard
-  // envelope; the hardest normalized dimension wins. Thus a short steep wall
-  // and a longer sustained wall can land in the same rider-facing class.
-  def connectorWallSeverity(connector: Connector): Double =
-    Vector(
-      finiteNonNegative(connector.maxGrade30Pct) / ForbiddenWallGrade30Pct,
-      finiteNonNegative(connector.maxGrade100Pct) / ForbiddenWallGrade100Pct,
-      finiteNonNegative(
-        connectorLongestPowerStreakSeconds(
-          connector,
-          PowerPolicy.SafetyWallPowerW
-        )
-      ) / ForbiddenWallMinAbove180Seconds
-    ).max
-
-  def rawConnectorVariants(connector: Connector): Vector[Connector] =
-    if connector.searchConnectorVariants.nonEmpty then connector.searchConnectorVariants
-    else Vector(connector)
-
-  // Rider-facing dynamic wall tiers are discovered after the locally useful
-  // connector caches are built. Keeping discovery after local Pareto pruning
-  // is intentional: dominated route-search noise must not create fake wall
-  // classes.
-
-
-  // ---------------------------------------------------------------------
-  // CURRENT EXACT PRODUCT ORDERING CONTRACT
-  //
-  // Hard ordering rule: at least one non-demanding mandatory trail before the
-  // first demanding technical descent. A second warm-up and avoiding demanding
-  // adjacency are rider-quality preferences. No recovery-after-demanding block
-  // and no forbidden full order are
-  // part of the product model.
-  // ---------------------------------------------------------------------
-
-  require(trailCount > 0, "No mandatory trails available for route solver.")
-
-  def trailBit(trailIndex: Int): Int =
-    1 << trailIndex
-
-  def isSteepTwistyTrail(trailIndex: Int): Boolean =
-    effectiveSteepTwistyIndices.contains(trailIndex)
-
-  // Product hard ordering contract:
-  // at least ONE non-demanding mandatory trail must be ridden before the first
-  // demanding technical descent. Demanding adjacency and demanding-last are
-  // not hard-forbidden; they are rider-quality preferences.
-  def trailPositionAllowed(trailIndex: Int, oneBasedPosition: Int): Boolean =
-    !isSteepTwistyTrail(trailIndex) ||
-      oneBasedPosition >= 2
-
-  def trailTransitionAllowed(previousTrailIndex: Int, nextTrailIndex: Int, nextOneBasedPosition: Int): Boolean =
-    trailPositionAllowed(nextTrailIndex, nextOneBasedPosition)
-
-  def appendConnectorAscent(shape: ClimbShape, connector: Connector, zeroBasedTransferIndex: Int): ClimbShape =
-    // endpoint->trail1 is transfer 0; trail1->trail2 is transfer 1.
-    // Their ascent is deliberately irrelevant to fatigue shaping.
-    if zeroBasedTransferIndex < 2 then shape
-    else appendClimbShape(shape, connector.ascentM)
-
-  val stateCount = 1 << trailCount
-
-  val fullMask = stateCount - 1
-
-  // Raw labeled variants are retained only because production real-ride
-  // evidence is matched/applied before the corrected safety graph is built.
-  case class LabeledUsefulConnector(label: String, connector: Connector)
-
-  val labeledRawConnectorVariants =
-    (
-      trails.indices.flatMap { i =>
-        matrix.startToTrail(i)
-          .toVector
-          .flatMap(rawConnectorVariants)
-          .map { connector =>
-            LabeledUsefulConnector(
-              s"${endpointName(connector.route.from)} -> ${trails(i).name}",
-              connector
-            )
-          }
-      } ++
-        trails.indices.flatMap { i =>
-          trails.indices.flatMap { j =>
-            if i == j then
-              Vector.empty[
-                LabeledUsefulConnector
-              ]
-            else
-              matrix.between(i)(j)
-                .toVector
-                .flatMap(rawConnectorVariants)
-                .map { connector =>
-                  LabeledUsefulConnector(
-                    s"${trails(i).name} -> ${trails(j).name}",
-                    connector
-                  )
-                }
-          }
-        } ++
-        trails.indices.flatMap { i =>
-          matrix.trailToFinish(i)
-            .toVector
-            .flatMap(rawConnectorVariants)
-            .map { connector =>
-              LabeledUsefulConnector(
-                s"${trails(i).name} -> ${endpointName(connector.route.to)}",
-                connector
-              )
-            }
-        }
-    ).toVector
-
-  case class WallSeverityGroup(
-      ordinal: Int,
-      minSeverity: Double,
-      maxSeverity: Double,
-      members: Vector[LabeledUsefulConnector],
-      fullRouteFeasible: Boolean,
-      cumulativeUsefulVariants: Int,
-      cumulativeReachablePairs: Int,
-      newlyReachablePairs: Int
-  )
-
-  case class RiddenTrailOccurrence(trailIndex: Int, startSampleIndex: Int, endSampleIndex: Int)
-
-  case class RiddenTransferSegment(label: String, samples: Vector[RealRideSample])
-
-  case class RiddenProfile(points: Vector[Point], coveragePct: Double, p90LateralM: Double, removedDriftMPerKm: Double)
-
-  def percentile(values: Vector[Double], p: Double): Double =
-    if values.isEmpty then
-      Double.NaN
-    else
-      val sorted = values.sorted
-      val idx =
-        math.max(
-          0,
-          math.min(
-            sorted.size - 1,
-            math.round(
-              (sorted.size - 1) *
-                p
-            ).toInt
-          )
-        )
-      sorted(idx)
-
-  def median(values: Vector[Double]): Double =
-    percentile(values, 0.5)
-
-  def robustLinearFit(samples: Vector[(Double, Double)], minimumPairSeparationM: Double = 80.0): (Double, Double) =
-    if samples.size < 2 then
-      (0.0, samples.headOption.map(_._2).getOrElse(0.0))
-    else
-      val slopes = Vector.newBuilder[Double]
-      var i = 0
-      while i + 1 < samples.size do
-        val (
-          x0,
-          y0
-        ) =
-          samples(i)
-        var j = i + 1
-        while j < samples.size do
-          val (
-            x1,
-            y1
-          ) =
-            samples(j)
-          val dx = x1 -
-              x0
-          if dx >= minimumPairSeparationM
-          then
-            slopes +=
-              (
-                y1 -
-                  y0
-              ) / dx
-          j += 1
-        i += 1
-      val slopeValues = slopes.result()
-      val slope =
-        if slopeValues.nonEmpty then median(slopeValues)
-        else 0.0
-      val intercept =
-        median(
-          samples.map {
-            case (
-                  x,
-                  y
-                ) =>
-              y -
-                slope * x
-          }
-        )
-      (slope, intercept)
-
-  def smoothResidualSeries(values: Vector[Double]): Vector[Double] =
-    if values.size < 3 then
-      values
-    else
-      val medianed = values.indices.map { i =>
-          val from = math.max(0, i - 2)
-          val until = math.min(values.size, i + 3)
-          median(values.slice(from, until))
-        }.toVector
-      val weights = Vector(1.0, 2.0, 3.0, 2.0, 1.0)
-      medianed.indices.map { i =>
-        var weighted = 0.0
-        var totalWeight = 0.0
-        var k = -2
-        while k <= 2 do
-          val j = math.max(0, math.min(medianed.size - 1, i + k))
-          val w = weights(k + 2)
-          weighted +=
-            medianed(j) * w
-          totalWeight +=
-            w
-          k += 1
-        weighted /
-          totalWeight
-      }.toVector
-
-  def localWindowGradeSeries(points: Vector[Point], windowM: Double): Vector[(Double, Double)] =
-    Geometry.exactSustainedGradeWindows(points, windowM)
-
-  def commonWallGradeEvidence(first: Vector[(Double, Double)], second: Vector[(Double, Double)]): Option[(Double, Double, Double)] =
-    if first.isEmpty ||
-        second.isEmpty
-    then
-      None
-    else
-      val secondSamples = second
-      val candidates =
-        first.flatMap {
-          case (
-                distance,
-                grade1
-              ) =>
-            interpolateProfile(
-              secondSamples,
-              distance
-            ).map { grade2 =>
-              (distance, grade1, grade2, math.min(grade1, grade2))
-            }
-        }
-      if candidates.isEmpty then
-        None
-      else
-        val best = candidates.maxBy(_._4)
-        Some(
-          (
-            best._1,
-            best._4,
-            math.abs(
-              best._2 -
-                best._3
-            )
-          )
-        )
-
-  def riddenTrailOccurrence(ride: RealRide, trailIndex: Int): Option[RiddenTrailOccurrence] =
-    val trail = sourceTrails(trailIndex)
-    val denseTrail = Geometry.resample(trail.points, 8.0)
-    val trailLength = Geometry.pathLengthMeters(denseTrail)
-    if denseTrail.size < 2 ||
-        trailLength < 30.0
-    then
-      None
-    else
-      val projected = ride.samples.map { sample =>
-          Geometry.projectToPolyline(
-            sample.point,
-            denseTrail
-          ).getOrElse(Geometry.PolylineProjection(0.0, Double.PositiveInfinity))
-        }
-      val rideCum = Array.ofDim[Double](ride.samples.size)
-      var i = 1
-      while i < ride.samples.size do
-        val previous = ride.samples(i - 1)
-        val current = ride.samples(i)
-        rideCum(i) =
-          rideCum(i - 1) +
-            (
-              if previous.segmentIndex == current.segmentIndex
-              then
-                Geometry.distanceMeters(previous.point, current.point)
-              else
-                0.0
-            )
-        i += 1
-      val startCandidates = projected.indices.filter { i =>
-          projected(i).lateralM <= 18.0 &&
-            projected(i).alongM <= 35.0
-        }
-
-      // Permit a real traversal to leave the catalog line near the end.
-      // This is important for Abschluss: both recordings follow the catalog
-      // for roughly 550/595 m and then diverge. Requiring the exact catalog
-      // endpoint would wrongly erase a clearly ridden trail occurrence.
-      val endCandidates = projected.indices.filter { i =>
-          projected(i).lateralM <= 18.0 &&
-            projected(i).alongM >= trailLength * 0.82
-        }
-      var best = Option.empty[
-          (Int, Int, Double)
-        ]
-      startCandidates
-        .take(60)
-        .foreach { first =>
-          endCandidates
-            .iterator
-            .filter { last =>
-                last > first &&
-                  ride.samples(last).segmentIndex == ride.samples(first).segmentIndex
-            }
-            .take(80)
-            .foreach { last =>
-              val expectedProgress = projected(last).alongM
-              val riddenSpan = rideCum(last) -
-                  rideCum(first)
-              val spanOk =
-                riddenSpan >=
-                  math.max(
-                    20.0,
-                    expectedProgress * 0.55
-                  ) &&
-                  riddenSpan <= expectedProgress * 1.80 +
-                      100.0
-              if spanOk then
-                val near =
-                  projected.slice(
-                    first,
-                    last + 1
-                  ).filter(_.lateralM <= 18.0)
-                if near.size >= 5 then
-                  val alongs = near.map(_.alongM)
-                  val coverage =
-                    (
-                      alongs.max -
-                        alongs.min
-                    ) /
-                      trailLength
-                  val nearFraction = near.size.toDouble /
-                      math.max(
-                        1,
-                        last - first + 1
-                      ).toDouble
-                  val p90Gap =
-                    percentile(
-                      near.map(
-                        _.lateralM
-                      ),
-                      0.90
-                    )
-                  if coverage >= 0.80 &&
-                      nearFraction >= 0.45
-                  then
-                    val score =
-                      math.abs(
-                        riddenSpan -
-                          expectedProgress
-                      ) +
-                        p90Gap * 5.0 +
-                        (
-                          1.0 -
-                            nearFraction
-                        ) * 100.0 +
-                        (
-                          1.0 -
-                            coverage
-                        ) * 20.0
-                    best match
-                      case None =>
-                        best = Some((first, last, score))
-                      case Some(
-                            (_, _, oldScore)
-                          ) =>
-                        if score < oldScore then
-                          best = Some((first, last, score))
-            }
-        }
-      best.map {
-        case (
-              first,
-              last,
-              _
-            ) =>
-          RiddenTrailOccurrence(trailIndex, first, last)
-      }
-
-  def riddenTransferSegments(ride: RealRide): Vector[RiddenTransferSegment] =
-    val occurrences = trails.indices
-        .flatMap { i =>
-          riddenTrailOccurrence(ride, i)
-        }
-        .sortBy(_.startSampleIndex)
-        .foldLeft(
-          Vector.empty[
-            RiddenTrailOccurrence
-          ]
-        ) { (acc, current) =>
-          if acc.lastOption.exists(
-            previous =>
-              current.startSampleIndex <= previous.endSampleIndex
-          ) then
-            acc
-          else
-            acc :+
-              current
-        }
-    if occurrences.size < 2 then Vector.empty
-    else occurrences
-        .sliding(2)
-        .flatMap {
-          case Vector(from, to)
-              if to.startSampleIndex >
-                from.endSampleIndex + 2 &&
-                ride.samples(from.endSampleIndex).segmentIndex == ride.samples(to.startSampleIndex).segmentIndex =>
-            val samples = ride.samples.slice(from.endSampleIndex, to.startSampleIndex + 1)
-            Some(
-              RiddenTransferSegment(
-                s"${trails(from.trailIndex).name} -> ${trails(to.trailIndex).name}",
-                samples
-              )
-            )
-          case _ =>
-            None
-        }
-        .toVector
-
-  def movingRideSamples(samples: Vector[RealRideSample]): Vector[RealRideSample] =
-    if samples.size < 3 then samples
-    else samples.indices.flatMap { i =>
-        if i <= 0 ||
-            i + 1 >= samples.size
-        then
-          None
-        else
-          val current = samples(i)
-          val previous = samples(i - 1)
-          val next = samples(i + 1)
-          val dtPrev = current.epochSeconds -
-              previous.epochSeconds
-          val dtNext = next.epochSeconds -
-              current.epochSeconds
-          val progressSpeed =
-            if dtPrev > 0.0 &&
-                dtPrev <= 20.0
-            then
-              Geometry.distanceMeters(
-                previous.point,
-                current.point
-              ) / dtPrev
-            else
-              0.0
-          val sensorMoving = current.speedMps.exists(_ >= 0.45)
-          val progressMoving =
-            progressSpeed >= 0.30
-          val sameContinuity =
-            previous.segmentIndex == current.segmentIndex &&
-              current.segmentIndex == next.segmentIndex
-          val usable = sameContinuity &&
-              current.point.ele.isDefined &&
-              dtPrev > 0.0 &&
-              dtPrev <= 20.0 &&
-              dtNext > 0.0 &&
-              dtNext <= 20.0 &&
-              (
-                sensorMoving ||
-                  progressMoving
-              )
-          if usable then Some(current)
-          else None
-      }.toVector
-
-  def interpolateProfile(samples: Vector[(Double, Double)], distanceM: Double): Option[Double] =
-    if samples.isEmpty then
-      None
-    else if distanceM <= samples.head._1
-    then
-      Some(samples.head._2)
-    else if distanceM >= samples.last._1
-    then
-      Some(samples.last._2)
-    else
-      var i = 0
-      while i + 1 <
-          samples.size
-      do
-        val (
-          d0,
-          z0
-        ) =
-          samples(i)
-        val (
-          d1,
-          z1
-        ) =
-          samples(i + 1)
-        if distanceM >= d0 &&
-            distanceM <= d1
-        then
-          val span = d1 - d0
-          if span <= 1e-9 then
-            return Some(z1)
-          val t =
-            (
-              distanceM -
-                d0
-            ) / span
-          return Some(
-            z0 +
-              (
-                z1 -
-                  z0
-              ) * t
-          )
-        i += 1
-      None
-
-  def riddenProfileOnReference(segment: RiddenTransferSegment, reference: Vector[Point]): Option[RiddenProfile] =
-    val referenceLength = Geometry.pathLengthMeters(reference)
-    if referenceLength < 80.0 then
-      None
-    else
-      val projected =
-        movingRideSamples(
-          segment.samples
-        ).flatMap { sample =>
-          Geometry.projectToPolyline(
-            sample.point,
-            reference
-          ).flatMap { projection =>
-            sample.point.ele.map { elevation =>
-              (projection.alongM, projection.lateralM, elevation)
-            }
-          }
-        }.filter {
-          case (
-                _,
-                lateral,
-                _
-              ) =>
-            lateral <= 22.0
-        }.sortBy(_._1)
-      if projected.size < 10 then
-        None
-      else
-        val p90Lateral = percentile(projected.map(_._2), 0.90)
-        val minAlong = projected.head._1
-        val maxAlong = projected.last._1
-        val coverage =
-          (
-            maxAlong -
-              minAlong
-          ) /
-            referenceLength
-        val endpointCoverageOk = minAlong <= 40.0 &&
-            maxAlong >= referenceLength -
-                40.0
-
-        // The second phone in the real ride is horizontally offset by roughly
-        // 10-15 m on some long transfers. That is still useful evidence when
-        // both recordings follow the same corridor. A 12 m p90 gate was too
-        // strict and discarded two known-common transfers in V4-12A.
-        if coverage < 0.75 ||
-            !endpointCoverageOk ||
-            p90Lateral > 18.0
-        then
-          None
-        else
-          val binSizeM = 10.0
-          val binned = projected
-              .groupBy {
-                case (
-                      along,
-                      _,
-                      _
-                    ) =>
-                  math.round(
-                    along /
-                      binSizeM
-                  ).toInt
-              }
-              .toVector
-              .sortBy(_._1)
-              .map {
-                case (
-                      bin,
-                      xs
-                    ) =>
-                  (
-                    bin.toDouble *
-                      binSizeM,
-                    median(xs.map(_._3))
-                  )
-              }
-          val referenceWithDistance = Geometry.pointsWithCumulativeDistance(Geometry.resample(reference, 10.0))
-          val rawPhoneProfile =
-            referenceWithDistance.flatMap {
-              case (
-                    distance,
-                    point
-                  ) =>
-                interpolateProfile(
-                  binned,
-                  distance
-                ).map { z =>
-                  point.copy(
-                    ele = Some(z)
-                  )
-                }
-            }
-          if rawPhoneProfile.size != referenceWithDistance.size
-          then
-            None
-          else
-            // Raw phone altitudes have large absolute offsets and slow drift.
-            // Fit only an AFFINE phone-vs-Valhalla residual over long point
-            // separations. Subtracting that low-order drift cannot invent or
-            // erase a short 30/100 m wall; local residual shape remains.
-            val deltaSamples =
-              referenceWithDistance.zip(
-                rawPhoneProfile
-              ).flatMap {
-                case (
-                      (
-                        distance,
-                        referencePoint
-                      ),
-                      phonePoint
-                    ) =>
-                  for
-                    referenceElevation <-
-                      referencePoint.ele
-                    phoneElevation <-
-                      phonePoint.ele
-                  yield
-                    (
-                      distance,
-                      phoneElevation -
-                        referenceElevation
-                    )
-              }
-            if deltaSamples.size <
-                5
-            then
-              None
-            else
-              val (
-                driftSlope,
-                driftIntercept
-              ) =
-                robustLinearFit(deltaSamples)
-              val rawResiduals =
-                referenceWithDistance.zip(
-                  rawPhoneProfile
-                ).map {
-                  case (
-                        (
-                          distance,
-                          referencePoint
-                        ),
-                        phonePoint
-                      ) =>
-                    (
-                      referencePoint.ele,
-                      phonePoint.ele
-                    ) match
-                      case (
-                            Some(referenceElevation),
-                            Some(phoneElevation)
-                          ) =>
-                        phoneElevation -
-                          referenceElevation -
-                          (
-                            driftIntercept +
-                              driftSlope *
-                                distance
-                          )
-                      case _ =>
-                        0.0
-                }
-              val smoothedResiduals = smoothResidualSeries(rawResiduals)
-              val taperM = 35.0
-              val corrected =
-                referenceWithDistance.zip(
-                  smoothedResiduals
-                ).map {
-                  case (
-                        (
-                          distance,
-                          referencePoint
-                        ),
-                        residual
-                      ) =>
-                    val edgeTaper =
-                      math.max(
-                        0.0,
-                        math.min(
-                          1.0,
-                          math.min(
-                            distance /
-                              taperM,
-                            (
-                              referenceLength -
-                                distance
-                            ) /
-                              taperM
-                          )
-                        )
-                      )
-                    referencePoint.ele match
-                      case Some(referenceElevation) =>
-                        referencePoint.copy(
-                          ele =
-                            Some(
-                              referenceElevation +
-                                residual *
-                                  edgeTaper
-                            )
-                        )
-                      case None =>
-                        referencePoint
-                }
-              Some(RiddenProfile(corrected, coverage * 100.0, p90Lateral, driftSlope * 1000.0))
-
-  val riddenTransferSegmentsByRide = realRides.map { ride =>
-      ride.path ->
-        riddenTransferSegments(ride)
-    }.toMap
-
-  val riddenTransferLabels = riddenTransferSegmentsByRide.values
-      .flatMap(_.map(_.label))
-      .toSet
-      .toVector
-      .sorted
-
-  case class RealRideWallEvidence(
-      label: String,
-      referenceGeometry: Vector[Point],
-      common30: Option[(Double, Double, Double)],
-      common100: Option[(Double, Double, Double)]
-  )
 
   case class CorridorMatch(
-      matched: Boolean,
-      candidateToRideP90M: Double,
-      rideToCandidateP90M: Double,
-      lengthRatio: Double,
-      startGapM: Double,
-      endGapM: Double
+      matched:Boolean,
+      candidateToRideP90M:Double,
+      rideToCandidateP90M:Double,
+      lengthRatio:Double,
+      startGapM:Double,
+      endGapM:Double
   )
 
-  def corridorMatch(candidate: Vector[Point], riddenReference: Vector[Point]): CorridorMatch =
-    val candidateDense = Geometry.resample(candidate, 20.0)
-    val riddenDense = Geometry.resample(riddenReference, 20.0)
-    val candidateLength = Geometry.pathLengthMeters(candidateDense)
-    val riddenLength = Geometry.pathLengthMeters(riddenDense)
-    val ratio =
-      if riddenLength > 1e-9 then
-        candidateLength /
-          riddenLength
+  def evidenceCorridorMatch(candidate:Vector[Point], reference:Vector[Point]):CorridorMatch =
+    val candidateDense=samplePolyline(candidate,20.0)
+    val referenceDense=samplePolyline(reference,20.0)
+    val candidateLength=if candidateDense.size>=2 then cumulative(candidateDense).last else 0.0
+    val referenceLength=if referenceDense.size>=2 then cumulative(referenceDense).last else 0.0
+    val ratio=if referenceLength>1e-9 then candidateLength/referenceLength else Double.PositiveInfinity
+    def p90DistanceTo(from:Vector[Point],to:Vector[Point]):Double =
+      if from.isEmpty || to.size<2 then Double.PositiveInfinity
       else
-        Double.PositiveInfinity
-
-    def p90DistanceTo(from: Vector[Point], to: Vector[Point]): Double =
-      percentile(
-        from.flatMap { point =>
-          Geometry.projectToPolyline(
-            point,
-            to
-          ).map(_.lateralM)
-        },
-        0.90
-      )
-
-    val c2r = p90DistanceTo(candidateDense, riddenDense)
-    val r2c = p90DistanceTo(riddenDense, candidateDense)
-    val startGap =
-      for
-        a <- candidateDense.headOption
-        b <- riddenDense.headOption
-      yield Geometry.distanceMeters(a, b)
-    val endGap =
-      for
-        a <- candidateDense.lastOption
-        b <- riddenDense.lastOption
-      yield Geometry.distanceMeters(a, b)
-    val startGapM = startGap.getOrElse(Double.PositiveInfinity)
-    val endGapM = endGap.getOrElse(Double.PositiveInfinity)
-
-    // The real recordings are evidence for the SAME ridden corridor only.
-    // This prevents a wall observed on one direct transfer from contaminating
-    // a deliberately different detour between the same pair of trails.
-    val matched = candidateDense.size >= 2 &&
-        riddenDense.size >= 2 &&
-        ratio >= 0.75 &&
-        ratio <= 1.30 &&
-        c2r <= 18.0 &&
-        r2c <= 18.0 &&
-        startGapM <= 70.0 &&
-        endGapM <= 70.0
-    CorridorMatch(matched, c2r, r2c, ratio, startGapM, endGapM)
-
-  case class LocalEvidenceCorridorMatch(matched: Boolean, maxRideToCandidateM: Double, p90RideToCandidateM: Double)
-
-  // A global corridor match is not enough to transfer a LOCAL wall: a variant
-  // may follow the ridden route for >90% of its length but bypass exactly the
-  // steep 30/100 m section. Require every dense ridden-reference sample across
-  // the accepted evidence window to stay inside the existing 18 m corridor
-  // tolerance of the generated candidate.
-  def localEvidenceCorridorMatch(
-      candidate: Vector[Point],
-      riddenReference: Vector[Point],
-      centerM: Double,
-      windowM: Double
-  ): LocalEvidenceCorridorMatch =
-    val candidateDense = Geometry.resample(candidate, 5.0)
-    val referenceDense = Geometry.resample(riddenReference, 5.0)
-    val startM = math.max(0.0, centerM - windowM / 2.0)
-    val endM = centerM + windowM / 2.0
-    val localReference =
-      Geometry.pointsWithCumulativeDistance(
-        referenceDense
-      ).collect {
-        case (distanceM, point)
-            if distanceM >= startM - 1e-9 &&
-              distanceM <= endM + 1e-9 =>
-          point
-      }
-    val projections = localReference.flatMap { point =>
-        Geometry.projectToPolyline(point, candidateDense)
-      }
-    val distances = projections.map(_.lateralM)
-
-    // Local wall evidence is directional. Require substantial forward
-    // progress through the same candidate window, but tolerate a few metres
-    // of projection jitter on bends. Reversed traversal has a negative span.
-    val directionSpanM =
-      if projections.size >= 2 then
-        projections.last.alongM -
-          projections.head.alongM
-      else
-        Double.NegativeInfinity
-    val directionConsistent = projections.size >= 2 &&
-        directionSpanM >=
-          math.max(
-            10.0,
-            windowM * 0.50
-          ) &&
-        projections.sliding(2).forall {
-          case Vector(a, b) =>
-            b.alongM >= a.alongM - 5.0
-          case _ =>
-            true
-        }
-    val maxDistance =
-      if distances.nonEmpty then distances.max
+        val projection=Projection(to.map(_.lat).sum/to.size,to.map(_.lon).sum/to.size)
+        percentile(from.flatMap(p=>projectToPolyline(p,to,projection).map(_.lateralM)),0.90)
+    val c2r=p90DistanceTo(candidateDense,referenceDense)
+    val r2c=p90DistanceTo(referenceDense,candidateDense)
+    val startGap=
+      if candidateDense.nonEmpty && referenceDense.nonEmpty then haversine(candidateDense.head,referenceDense.head)
       else Double.PositiveInfinity
-    val p90Distance = percentile(distances, 0.90)
-    LocalEvidenceCorridorMatch(
-      matched =
-        localReference.size >= 4 &&
-          projections.size == localReference.size &&
-          directionConsistent &&
-          maxDistance <= 18.0,
-      maxRideToCandidateM = maxDistance,
-      p90RideToCandidateM = p90Distance
-    )
+    val endGap=
+      if candidateDense.nonEmpty && referenceDense.nonEmpty then haversine(candidateDense.last,referenceDense.last)
+      else Double.PositiveInfinity
+    val matched=
+      candidateDense.size>=2 &&
+        referenceDense.size>=2 &&
+        ratio>=0.75 && ratio<=1.30 &&
+        c2r<=18.0 && r2c<=18.0 &&
+        startGap<=70.0 && endGap<=70.0
+    CorridorMatch(matched,c2r,r2c,ratio,startGap,endGap)
 
-  // Production evidence is intentionally stricter than the broad diagnostic
-  // above. A wall floor is accepted only when BOTH phones show the uphill at
-  // the same non-edge route location and agree reasonably on its grade.
-  //
-  // 30 m evidence:
-  //   - window center >=45 m from either end
-  //   - phones differ by <=5 grade points
-  //   - conservative common grade >= Valhalla +4 points
-  //
-  // 100 m evidence:
-  //   - window center >=60 m from either end
-  //   - phones differ by <=4 grade points
-  //   - conservative common grade >= Valhalla +3 points
-  //
-  // Power-only disagreement remains diagnostic and never changes production
-  // wall class because the two longest power streaks may occur at different
-  // locations.
-  val productionRealRideWallEvidence = riddenTransferLabels.flatMap { label =>
-      val segments = realRides.flatMap { ride =>
-          riddenTransferSegmentsByRide
-            .getOrElse(ride.path, Vector.empty)
-            .find(_.label == label)
-            .map(
-              ride ->
-                _
-            )
-        }
-      if segments.size < 2 then
-        None
-      else
-        val movingReference =
-          movingRideSamples(
-            segments.head._2.samples
-          ).map(_.point)
-        if movingReference.size < 5 then
-          None
-        else
-          val referenceGeometry =
-            try
-              val dense = Geometry.resample(movingReference, 10.0)
-              valhalla.withElevation(dense)
-            catch
-              case _: Exception =>
-                Vector.empty[Point]
-          if referenceGeometry.size < 2 then
-            None
-          else
-            val profiles =
-              segments.flatMap {
-                case (
-                      _,
-                      segment
-                    ) =>
-                  riddenProfileOnReference(segment, referenceGeometry)
-              }
-            if profiles.size < 2 then
-              None
-            else
-              val first = profiles(0)
-              val second = profiles(1)
-              val referenceLength = Geometry.pathLengthMeters(referenceGeometry)
-              val common30 =
-                commonWallGradeEvidence(
-                  localWindowGradeSeries(
-                    first.points,
-                    30.0
-                  ),
-                  localWindowGradeSeries(second.points, 30.0)
-                )
-              val common100 =
-                commonWallGradeEvidence(
-                  localWindowGradeSeries(
-                    first.points,
-                    100.0
-                  ),
-                  localWindowGradeSeries(second.points, 100.0)
-                )
-              val valhallaStats = Geometry.profileStats(referenceGeometry)
-              val accepted30 =
-                common30.filter {
-                  case (
-                        distance,
-                        grade,
-                        phoneDifference
-                      ) =>
-                    distance >= 45.0 &&
-                      distance <= referenceLength - 45.0 &&
-                      phoneDifference <= 5.0 &&
-                      grade >= valhallaStats.maxGrade30Pct + 4.0
-                }
-              val accepted100 =
-                common100.filter {
-                  case (
-                        distance,
-                        grade,
-                        phoneDifference
-                      ) =>
-                    distance >= 60.0 &&
-                      distance <= referenceLength - 60.0 &&
-                      phoneDifference <= 4.0 &&
-                      grade >= valhallaStats.maxGrade100Pct + 3.0
-                }
-              val severityFloor =
-                Vector(
-                  accepted30
-                    .map(_._2)
-                    .map { grade =>
-                        grade /
-                          ForbiddenWallGrade30Pct
-                    }
-                    .getOrElse(0.0),
-                  accepted100
-                    .map(_._2)
-                    .map { grade =>
-                        grade /
-                          ForbiddenWallGrade100Pct
-                    }
-                    .getOrElse(0.0)
-                ).max
-              val valhallaSeverity =
-                Vector(
-                  math.max(
-                    0.0,
-                    valhallaStats.maxGrade30Pct
-                  ) /
-                    ForbiddenWallGrade30Pct,
-                  math.max(
-                    0.0,
-                    valhallaStats.maxGrade100Pct
-                  ) /
-                    ForbiddenWallGrade100Pct
-                ).max
-              if severityFloor >
-                  valhallaSeverity + 0.06
-              then
-                Some(RealRideWallEvidence(label, referenceGeometry, accepted30, accepted100))
-              else
-                None
+  /**
+   * Safety-active real-ride evidence is derived only from transfer labels that
+   * appear in at least two recordings. Recordings that do not contain two
+   * recognizable mandatory occurrences remain validated inputs but do not
+   * contaminate unrelated connectors.
+   */
+  def buildRealRideEvidence(reals:Vector[Gpx],trails:Vector[Trail]):Result[Vector[EvidenceCorridor]] =
+    val labeled=reals.sortBy(_.name).flatMap { ride =>
+      riddenTransferSegments(ride,trails).map(segment=>(segment.label,ride.name,segment.points))
     }
-
-  val realRideWallSeverityFloorByConnector = new java.util.IdentityHashMap[
-      Connector,
-      java.lang.Double
-    ]()
-  productionRealRideWallEvidence.foreach { evidence =>
-    labeledRawConnectorVariants
-      .filter(_.label == evidence.label)
-      .foreach { item =>
-        val connector = item.connector
-        val matchResult = corridorMatch(connector.route.points, evidence.referenceGeometry)
-        val local30 =
-          evidence.common30.map {
-            case (distance, grade, _) =>
-              (
-                localEvidenceCorridorMatch(
-                  connector.route.points,
-                  evidence.referenceGeometry,
-                  distance,
-                  30.0
-                ),
-                grade / ForbiddenWallGrade30Pct
-              )
-          }
-        val local100 =
-          evidence.common100.map {
-            case (distance, grade, _) =>
-              (
-                localEvidenceCorridorMatch(
-                  connector.route.points,
-                  evidence.referenceGeometry,
-                  distance,
-                  100.0
-                ),
-                grade / ForbiddenWallGrade100Pct
-              )
-          }
-        val variantEvidenceFloor =
-          if matchResult.matched then
-            Vector(
-              local30.collect {
-                case (local, floor) if local.matched => floor
-              }.getOrElse(0.0),
-              local100.collect {
-                case (local, floor) if local.matched => floor
-              }.getOrElse(0.0)
-            ).max
+    val groups=labeled.groupBy(_._1).toVector.sortBy(_._1)
+    val evidence=groups.flatMap { case(label,items0) =>
+      val items=items0.sortBy(_._2)
+      if items.size<2 then None
+      else
+        val a=removeConsecutiveDuplicates(items(0)._3)
+        val b=removeConsecutiveDuplicates(items(1)._3)
+        if a.size<2 || b.size<2 then None
+        else
+          val (ref,other)=if headingNoise(a)<=headingNoise(b) then (a,b) else (b,a)
+          val proj=monotonicProject(other,ref).sortBy(_.s)
+          if proj.size<2 then None
           else
-            0.0
-        if variantEvidenceFloor > 0.0 then
-          val previous =
-            Option(
-              realRideWallSeverityFloorByConnector.get(connector)
-            ).map(_.doubleValue()).getOrElse(0.0)
-          realRideWallSeverityFloorByConnector.put(
-            connector,
-            java.lang.Double.valueOf(math.max(previous, variantEvidenceFloor))
-          )
-      }
-  }
+            val rcum=cumulative(ref)
+            val pairedRef=proj.map(x=>(x.s,interpolate(ref,rcum,x.s).ele))
+            val rawOther=proj.map(x=>(x.s,x.ele))
+            val bias=median(pairedRef.zip(rawOther).map{case(r,o)=>o._2-r._2})
+            val adjusted=rawOther.map{case(s,e)=>(s,e-bias)}
+            val refFull=rcum.zip(ref.map(_.ele))
+            val commonStart=math.max(refFull.head._1,adjusted.head._1)
+            val commonEnd=math.min(refFull.last._1,adjusted.last._1)
+            if commonEnd<=commonStart then None
+            else
+              val bestByWindow=Vector(30.0,100.0).flatMap { window =>
+                val margin=if window==30.0 then 45.0 else 60.0
+                val lo=math.max(commonStart,margin-window/2.0)
+                val hi=math.min(commonEnd-window,rcum.last-margin-window/2.0)
+                if hi<lo then None
+                else
+                  val starts=mutable.TreeSet.empty[Double]
+                  val breaks=(refFull.map(_._1)++adjusted.map(_._1)).distinct
+                  starts+=lo; starts+=hi
+                  breaks.foreach { x =>
+                    if x>=lo && x<=hi then starts+=x
+                    val y=x-window
+                    if y>=lo && y<=hi then starts+=y
+                  }
+                  val tolerance=if window==30.0 then 5.0 else 4.0
+                  starts.toVector.flatMap { s0 =>
+                    for
+                      r0<-interpSamples(refFull,s0)
+                      r1<-interpSamples(refFull,s0+window)
+                      o0<-interpSamples(adjusted,s0)
+                      o1<-interpSamples(adjusted,s0+window)
+                      g1=100.0*(r1-r0)/window
+                      g2=100.0*(o1-o0)/window
+                      if g1>0.0 && g2>0.0 && math.abs(g1-g2)<=tolerance
+                    yield EvidenceCandidate(label,window,s0,g1,g2,math.min(g1,g2))
+                  }.maxByOption(_.commonPct)
+              }
+              if bestByWindow.nonEmpty then Some(EvidenceCorridor(label,ref,bestByWindow))
+              else None
+    }
+    Right(evidence)
 
-  def realRideWallSeverityFloor(connector: Connector): Double =
-    Option(
-      realRideWallSeverityFloorByConnector.get(connector)
-    ).map(
-      _.doubleValue()
-    ).getOrElse(0.0)
+  def forwardEvidenceLocalGrade(
+      candidate:Vector[Point],
+      referenceWindow:Vector[Point],
+      windowM:Double
+  ):Option[Double] =
+    if candidate.size<2 || referenceWindow.size<2 || windowM<=0 then None
+    else
+      val sampled=samplePolyline(referenceWindow,5.0)
+      val projected=monotonicProject(sampled,candidate)
+      if sampled.size<2 || projected.size!=sampled.size then None
+      else
+        val span=projected.last.s-projected.head.s
+        val directionOk=
+          span>=math.max(10.0,windowM*0.50) &&
+            projected.sliding(2).forall {
+              case Vector(a,b) => b.s>=a.s-5.0
+              case _ => true
+            }
+        if !directionOk then None
+        else
+          val ccum=cumulative(candidate)
+          val a=interpolate(candidate,ccum,projected.head.s)
+          val b=interpolate(candidate,ccum,projected.last.s)
+          Some(100.0*math.max(0.0,b.ele-a.ele)/windowM)
 
-  def effectiveConnectorWallSeverity(connector: Connector): Double =
-    math.max(
-      connectorWallSeverity(
-        connector
-      ),
-      realRideWallSeverityFloor(connector)
+  def applyEvidence(
+      connectorLabel:String,
+      geometry:Vector[Point],
+      wall:WallMetrics,
+      corridors:Vector[EvidenceCorridor]
+  ): (Double,Vector[EvidenceApplication]) =
+    val physical=wall.physicalSeverity
+    val apps=mutable.ArrayBuffer.empty[EvidenceApplication]
+    corridors.filter(_.label==connectorLabel).foreach { c =>
+      val global=evidenceCorridorMatch(geometry,c.reference)
+      if global.matched then
+        val accepted=mutable.ArrayBuffer.empty[EvidenceCandidate]
+        c.candidates.foreach { ev =>
+          val localEvidenceGeom=slicePolyline(c.reference,ev.s,ev.s+ev.windowM)
+          val localOverlap=
+            if localEvidenceGeom.size>=2 then continuousCoTravel(geometry,localEvidenceGeom,15.0)
+            else 0.0
+          val directionMatched=forwardEvidenceLocalGrade(geometry,localEvidenceGeom,ev.windowM).nonEmpty
+          val connectorLocalMax=if ev.windowM==30.0 then wall.max30Pct else wall.max100Pct
+          val delta=if ev.windowM==30.0 then 4.0 else 3.0
+          if localOverlap>=ev.windowM-1.0 &&
+              directionMatched &&
+              ev.commonPct>=connectorLocalMax+delta
+          then accepted += ev
+        }
+        if accepted.nonEmpty then
+          val sev=accepted.map(e=>if e.windowM==30.0 then e.commonPct/27.0 else e.commonPct/20.0).max
+          if sev>physical+0.06 then
+            apps += EvidenceApplication(
+              c.label,
+              sev,
+              accepted.toVector.map(e=>f"${e.windowM}%.0fm@${e.s}%.1f common=${e.commonPct}%.2f%%")
+            )
+    }
+    val floor=apps.map(_.severity).foldLeft(0.0)(math.max)
+    (floor,apps.toVector)
+
+  class ValhallaClient(base:String):
+    private val http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build()
+
+    private case class RouteKey(
+        fromLat:Long,fromLon:Long,toLat:Long,toLon:Long,
+        profile:Profile,avoid:Vector[(Long,Long)]
     )
-  println()
-  // ---------------------------------------------------------------------
-  // BUILD THE LOCALLY USEFUL MATRIX AFTER REAL-RIDE WALL EVIDENCE AND SAFETY FILTERS.
-  //
-  // V4-14 applied real evidence only at final wall-class assignment. That was
-  // safe for the selected route, but it was one stage too late:
-  //   - a dual-ride-forbidden connector could still participate in local
-  //     pruning and in dynamic C1/C2/C3 breakpoint discovery;
-  //   - if that promoted connector had previously dominated another route
-  //     variant, the safer alternative might already have been discarded.
-  //
-  // Re-run raw-variant filtering + local Pareto pruning with EFFECTIVE wall
-  // severity, then re-run the exact reachability-based wall discovery. All
-  // downstream solver caches use this corrected matrix.
-  // ---------------------------------------------------------------------
+    private case class TraceKey(profile:Profile,shape:Vector[(Long,Long)])
 
-  def effectiveConnectorForbidden(connector: Connector): Boolean =
-    connectorForbidden(
-      connector
-    ) ||
-      connectorRoadForbidden(
-        connector
-      ) ||
-      effectiveConnectorWallSeverity(
-        connector
-      ) >= 1.0 - 1e-9
+    private val routeCache=mutable.HashMap.empty[RouteKey,Option[(Vector[Point],Double,String)]]
+    private val traceCache=mutable.HashMap.empty[TraceKey,(Vector[Point],Vector[EdgeAttr],String)]
+    private val elevationCache=mutable.HashMap.empty[Vector[(Long,Long)],Vector[Double]]
+    private var routeRequests=0L
+    private var routeCacheHits=0L
+    private var traceRequests=0L
+    private var traceCacheHits=0L
+    private var heightRequests=0L
+    private var heightCacheHits=0L
+    private var routeFetchNanos=0L
+    private var traceFetchNanos=0L
+    private var heightFetchNanos=0L
 
-  def sameDoubleBits(a: Double, b: Double): Boolean =
-    java.lang.Double.doubleToLongBits(
-      a
-    ) == java.lang.Double.doubleToLongBits(b)
+    private def bits(x:Double):Long=java.lang.Double.doubleToLongBits(x)
+    private def shapeKey(shape:Vector[Point]):Vector[(Long,Long)] =
+      shape.map(p => (bits(p.lat),bits(p.lon)))
+    private def elevationKey(shape:Vector[Point]):Vector[(Long,Long)] = shapeKey(shape)
 
-  def sameIntDoubleMapBits(a: Map[Int, Double], b: Map[Int, Double]): Boolean =
-    a.keySet == b.keySet &&
-      a.forall { case (key, value) =>
-        b.get(key).exists(other => sameDoubleBits(value, other))
+    def cacheStats:String =
+      f"routeRequests=$routeRequests routeCacheHits=$routeCacheHits routeFetch=${routeFetchNanos/1e9}%.3fs " +
+        f"traceRequests=$traceRequests traceCacheHits=$traceCacheHits traceFetch=${traceFetchNanos/1e9}%.3fs " +
+        f"heightRequests=$heightRequests heightCacheHits=$heightCacheHits heightFetch=${heightFetchNanos/1e9}%.3fs"
+
+    private def post(path:String,json:Value):Result[(Int,String)] =
+      boundary(s"Valhalla POST $path") {
+        val req=HttpRequest.newBuilder(URI.create(base+path))
+          .timeout(Duration.ofSeconds(60))
+          .header("Content-Type","application/json")
+          .header("X-Client-Id",BuildId)
+          .POST(HttpRequest.BodyPublishers.ofString(json.render(),StandardCharsets.UTF_8))
+          .build()
+        val response=http.send(req,HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+        (response.statusCode(),response.body())
       }
 
-  def samePointBits(a: Point, b: Point): Boolean =
-    sameDoubleBits(
-      a.lat,
-      b.lat
-    ) &&
-      sameDoubleBits(
-        a.lon,
-        b.lon
-      ) &&
-      (
-        (
-          a.ele,
-          b.ele
-        ) match
-          case (
-                Some(x),
-                Some(y)
-              ) =>
-            sameDoubleBits(x, y)
-          case (
-                None,
-                None
-              ) =>
-            true
-          case _ =>
-            false
+    def status():Result[String] =
+      boundary("Valhalla GET /status") {
+        val req=HttpRequest.newBuilder(URI.create(base+"/status"))
+          .timeout(Duration.ofSeconds(20))
+          .GET()
+          .build()
+        val response=http.send(req,HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+        (response.statusCode(),response.body())
+      }.flatMap { case(code,body) =>
+        if code/100 == 2 then Right(body.replaceAll("\\s+"," ").take(1000))
+        else Left(s"Valhalla status failure HTTP $code: ${body.take(300)}")
+      }
+
+    private def options(p:Profile):Obj =
+      Obj(
+        "bicycle_type"->"mountain",
+        "cycling_speed"->p.speedKph,
+        "use_hills"->p.useHills,
+        "use_roads"->p.useRoads,
+        "avoid_bad_surfaces"->0.50
       )
 
-  def samePointSequenceBits(a: Vector[Point], b: Vector[Point]): Boolean =
-    a.size == b.size &&
-      a.zip(
-        b
-      ).forall {
-        case (
-              x,
-              y
-            ) =>
-          samePointBits(x, y)
-      }
+    def route(
+        from:Point,
+        to:Point,
+        p:Profile,
+        avoidLocations:Vector[Point]=Vector.empty
+    ):Result[Option[(Vector[Point],Double,String)]] =
+      val key=RouteKey(bits(from.lat),bits(from.lon),bits(to.lat),bits(to.lon),p,shapeKey(avoidLocations))
+      routeCache.get(key) match
+        case Some(value) =>
+          routeCacheHits+=1
+          Right(value)
+        case None =>
+          routeRequests+=1
+          val fetchStarted=System.nanoTime()
+          val fetched=fetchRoute(from,to,p,avoidLocations)
+          routeFetchNanos += System.nanoTime()-fetchStarted
+          fetched.map { value =>
+            routeCache.update(key,value)
+            value
+          }
 
-  // Exact solver-semantic duplicate identity.
-  //
-  // Search-profile parameters are GENERATION inputs, not extra votes in
-  // rider-facing wall-tier discovery. Two candidates collapse only when:
-  //   - both routed geometries are bit-identical;
-  //   - every downstream safety/objective quantity is bit-identical;
-  //   - their POST-real-ride effective wall severity is bit-identical.
-  //
-  // We intentionally ignore routingSpeedKph/routingUseHills/routingUseRoads.
-  // They explain how an identical connector was discovered, but must not
-  // multiply its weight in terrain discovery or in the exact DP frontier.
-  def sameCorrectedSolverSemanticConnector(a: Connector, b: Connector): Boolean =
-    val sameGeometry =
-      samePointSequenceBits(
-        a.route.points,
-        b.route.points
-      ) &&
-        samePointSequenceBits(a.route.rawValhallaPoints, b.route.rawValhallaPoints)
-    val sameScalars =
-      Vector(
-        (a.ascentM, b.ascentM),
-        (a.descentM, b.descentM),
-        (a.lateAscentM, b.lateAscentM),
-        (a.physicsSeconds, b.physicsSeconds),
-        (a.fatiguePenaltySeconds, b.fatiguePenaltySeconds),
-        (
-          a.transferQualityPenaltySeconds,
-          b.transferQualityPenaltySeconds
+    private def fetchRoute(
+        from:Point,
+        to:Point,
+        p:Profile,
+        avoidLocations:Vector[Point]
+    ):Result[Option[(Vector[Point],Double,String)]] =
+      val payload=Obj(
+        "locations"->Arr(
+          Obj("lat"->from.lat,"lon"->from.lon),
+          Obj("lat"->to.lat,"lon"->to.lon)
         ),
-        (a.candidateComfortPenaltySeconds, b.candidateComfortPenaltySeconds),
-        (a.candidateComfortSpikeLoadSeconds, b.candidateComfortSpikeLoadSeconds),
-        (a.maxRiderPowerW, b.maxRiderPowerW),
-        (a.maxGrade30Pct, b.maxGrade30Pct),
-        (a.maxGrade100Pct, b.maxGrade100Pct),
-        (a.majorRoadSeconds, b.majorRoadSeconds),
-        (a.motorwayTrunkSeconds, b.motorwayTrunkSeconds),
-        (a.primaryNoCycleSeconds, b.primaryNoCycleSeconds),
-        (a.primarySharedSeconds, b.primarySharedSeconds),
-        (a.primaryWithCycleSeconds, b.primaryWithCycleSeconds),
-        (a.secondaryNoCycleSeconds, b.secondaryNoCycleSeconds),
-        (a.secondarySharedSeconds, b.secondarySharedSeconds),
-        (
-          a.longestLowProtectionPrimarySeconds,
-          b.longestLowProtectionPrimarySeconds
-        ),
-        (a.unpavedSeconds, b.unpavedSeconds),
-        (a.downhillHandlingSeconds, b.downhillHandlingSeconds),
-        (
-          a.longestTechnicalDownhillRunM,
-          b.longestTechnicalDownhillRunM
-        ),
-        (
-          a.maxTechnicalDownhillGrade30Pct,
-          b.maxTechnicalDownhillGrade30Pct
-        ),
-        (
-          a.maxTechnicalDownhillGrade100Pct,
-          b.maxTechnicalDownhillGrade100Pct
-        ),
-        (
-          a.maxTechnicalPathDownhillGrade30Pct,
-          b.maxTechnicalPathDownhillGrade30Pct
-        ),
-        (a.effectiveCrr, b.effectiveCrr),
-        (a.pathFraction, b.pathFraction),
-        (a.route.lengthKm, b.route.lengthKm),
-        (
-          effectiveConnectorWallSeverity(
-            a
-          ),
-          effectiveConnectorWallSeverity(b)
-        )
-      ).forall {
-        case (
-              x,
-              y
-            ) =>
-          sameDoubleBits(x, y)
-      }
-    sameGeometry &&
-      sameScalars &&
-      sameIntDoubleMapBits(a.powerAboveSecondsByThreshold, b.powerAboveSecondsByThreshold) &&
-      sameIntDoubleMapBits(
-        a.longestPowerStreakSecondsByThreshold,
-        b.longestPowerStreakSecondsByThreshold
-      ) &&
-      a.hasMotorwayTrunk == b.hasMotorwayTrunk
-
-  def collapseCorrectedSolverSemanticDuplicates(connectors: Vector[Connector]): Vector[Connector] =
-    connectors.foldLeft(
-      Vector.empty[Connector]
-    ) {
-      case (
-            kept,
-            candidate
-          ) =>
-        if kept.exists(
-            existing =>
-              sameCorrectedSolverSemanticConnector(existing, candidate)
-          )
-        then
-          kept
+        "costing"->"bicycle",
+        "costing_options"->Obj("bicycle"->options(p)),
+        "directions_type"->"none",
+        "units"->"kilometers",
+        "shape_format"->"polyline6"
+      )
+      if avoidLocations.nonEmpty then
+        payload.obj("avoid_locations")=Arr(avoidLocations.map(q=>Obj("lat"->q.lat,"lon"->q.lon))*)
+      post("/route",payload).flatMap { case(code,body) =>
+        if code/100 == 2 then
+          boundary("decode Valhalla route JSON")(ujson.read(body)).flatMap { json =>
+            boundary("read Valhalla route fields") {
+              val trip=json("trip")
+              val seconds=trip("summary")("time").num
+              val shapes=trip("legs").arr.toVector.map(_("shape").str)
+              (seconds,shapes)
+            }.flatMap { case(seconds,shapes) =>
+              if !seconds.isFinite || seconds < 0.0 then
+                Left(s"Valhalla route returned invalid transfer time: $seconds")
+              else if shapes.isEmpty then
+                Left("Valhalla route returned no leg shapes")
+              else
+                sequence(shapes.map(decodePolyline6)).flatMap { parts =>
+                  val geometry=dedupeBoundary(parts.flatten)
+                  val invalidCoordinate=geometry.exists(p =>
+                    !p.lat.isFinite || !p.lon.isFinite || p.lat < -90.0 || p.lat > 90.0 || p.lon < -180.0 || p.lon > 180.0
+                  )
+                  if geometry.size<2 then Left("Valhalla route returned an empty/degenerate geometry")
+                  else if invalidCoordinate then Left("Valhalla route returned an invalid coordinate")
+                  else Right(Some((geometry,seconds,body)):Option[(Vector[Point],Double,String)])
+                }
+            }
+          }
         else
-          kept :+
-            candidate
-    }
-
-  def correctedConnectorDominates(a: Connector, b: Connector): Boolean =
-    val wallA = effectiveConnectorWallSeverity(a)
-    val wallB = effectiveConnectorWallSeverity(b)
-    val sameAscent =
-      java.lang.Double.compare(
-        a.ascentM,
-        b.ascentM
-      ) == 0
-    val notWorse = sameAscent &&
-        wallA <= wallB &&
-        a.physicsSeconds <= b.physicsSeconds &&
-        connectorRoadStress(a) <= connectorRoadStress(b) &&
-        a.downhillHandlingSeconds <= b.downhillHandlingSeconds &&
-        a.transferQualityPenaltySeconds <= b.transferQualityPenaltySeconds &&
-        a.candidateComfortPenaltySeconds <= b.candidateComfortPenaltySeconds &&
-        connectorCandidateLongestLow(a) <= connectorCandidateLongestLow(b) &&
-        connectorCandidateLongestHigh(a) <= connectorCandidateLongestHigh(b) &&
-        a.candidateComfortSpikeLoadSeconds <= b.candidateComfortSpikeLoadSeconds &&
-        a.fatiguePenaltySeconds <= b.fatiguePenaltySeconds
-    val strictlyBetter = wallA < wallB ||
-        a.physicsSeconds < b.physicsSeconds ||
-        connectorRoadStress(a) <
-          connectorRoadStress(b) ||
-        a.downhillHandlingSeconds <
-          b.downhillHandlingSeconds ||
-        a.transferQualityPenaltySeconds <
-          b.transferQualityPenaltySeconds ||
-        a.candidateComfortPenaltySeconds <
-          b.candidateComfortPenaltySeconds ||
-        connectorCandidateLongestLow(a) < connectorCandidateLongestLow(b) ||
-        connectorCandidateLongestHigh(a) < connectorCandidateLongestHigh(b) ||
-        a.candidateComfortSpikeLoadSeconds <
-          b.candidateComfortSpikeLoadSeconds ||
-        a.fatiguePenaltySeconds <
-          b.fatiguePenaltySeconds
-    notWorse &&
-      strictlyBetter
-
-  def correctedConnectorVariants(connector: Connector): Vector[Connector] =
-    val offered =
-      rawConnectorVariants(
-        connector
-      ).filterNot(effectiveConnectorForbidden)
-    val distinct = collapseCorrectedSolverSemanticDuplicates(offered)
-    distinct.filterNot { candidate =>
-      distinct.exists { other =>
-        (other ne candidate) &&
-          correctedConnectorDominates(other, candidate)
+          val low=body.toLowerCase(Locale.ROOT)
+          if code == 400 && (low.contains("no path") || low.contains("no route") || low.contains("442")) then Right(None)
+          else Left(s"Valhalla route service failure HTTP $code: ${body.take(500)}")
       }
-    }
 
-  val correctedStartVariantCache =
-    Vector.tabulate(
-      trails.size
-    ) { i =>
-      matrix.startToTrail(i)
-        .map(correctedConnectorVariants)
-        .getOrElse(Vector.empty)
-    }
+    def traceAttributes(shape:Vector[Point],p:Profile):Result[(Vector[Point],Vector[EdgeAttr],String)] =
+      val key=TraceKey(p,shapeKey(shape))
+      traceCache.get(key) match
+        case Some(value) =>
+          traceCacheHits+=1
+          Right(value)
+        case None =>
+          traceRequests+=1
+          val fetchStarted=System.nanoTime()
+          val fetched=fetchTraceAttributes(shape,p)
+          traceFetchNanos += System.nanoTime()-fetchStarted
+          fetched.map { value =>
+            traceCache.update(key,value)
+            value
+          }
 
-  val correctedBetweenVariantCache =
-    Vector.tabulate(
-      trails.size
-    ) { i =>
-      Vector.tabulate(
-        trails.size
-      ) { j =>
-        if i == j then Vector.empty[Connector]
-        else matrix.between(i)(j)
-            .map(correctedConnectorVariants)
-            .getOrElse(Vector.empty)
-      }
-    }
-
-  val correctedFinishVariantCache =
-    Vector.tabulate(
-      trails.size
-    ) { i =>
-      matrix.trailToFinish(i)
-        .map(correctedConnectorVariants)
-        .getOrElse(Vector.empty)
-    }
-
-  val correctedUsefulConnectorVariants =
-    (
-      trails.indices.flatMap { i =>
-        correctedStartVariantCache(i).map { connector =>
-          LabeledUsefulConnector(
-            s"START -> ${trails(i).name}",
-            connector
+    private def fetchTraceAttributes(shape:Vector[Point],p:Profile):Result[(Vector[Point],Vector[EdgeAttr],String)] =
+      val payload=Obj(
+        "shape"->Arr(shape.map(q=>Obj("lat"->q.lat,"lon"->q.lon))*),
+        "costing"->"bicycle",
+        "costing_options"->Obj("bicycle"->options(p)),
+        "shape_match"->"edge_walk",
+        "shape_format"->"polyline6",
+        "directions_options"->Obj("units"->"kilometers"),
+        "filters"->Obj(
+          "action"->"include",
+          "attributes"->Arr(
+            "shape","edge.id","edge.length","edge.speed","edge.road_class",
+            "edge.begin_shape_index","edge.end_shape_index","edge.use","edge.surface",
+            "edge.cycle_lane","edge.unpaved","node.elapsed_time"
           )
-        }
-      } ++
-        trails.indices.flatMap { i =>
-          trails.indices.flatMap { j =>
-            if i == j then
-              Vector.empty[
-                LabeledUsefulConnector
-              ]
-            else
-              correctedBetweenVariantCache(i)(j).map { connector =>
-                LabeledUsefulConnector(
-                  s"${trails(i).name} -> ${trails(j).name}",
-                  connector
+        )
+      )
+
+      post("/trace_attributes",payload).flatMap { case(code,body) =>
+        if code/100 != 2 then Left(s"Valhalla trace_attributes failure HTTP $code: ${body.take(500)}")
+        else
+          boundary("decode trace_attributes JSON")(ujson.read(body)).flatMap { json =>
+            val shapeResult:Result[Vector[Point]] =
+              json.obj.get("shape") match
+                case Some(Str(encoded)) => decodePolyline6(encoded)
+                case _ => Right(shape)
+
+            val edgeValues=json.obj.get("edges") match
+              case Some(a:Arr) => Right(a.arr.toVector)
+              case _ => Left("Valhalla trace_attributes response missing edges")
+
+            for
+              traced <- shapeResult
+              rawEdges <- edgeValues
+            yield
+              var previousElapsed=0.0
+              val edges=rawEdges.zipWithIndex.map { case(edge,idx) =>
+                def str(k:String)=edge.obj.get(k).collect{case Str(s)=>s}.getOrElse("")
+                def num(k:String,d:Double=0.0)=edge.obj.get(k).collect{case Num(n)=>n}.getOrElse(d)
+                def int(k:String,d:Int = -1)=edge.obj.get(k).collect{case Num(n)=>n.toInt}.getOrElse(d)
+                def bool(k:String,d:Boolean=false)=edge.obj.get(k).collect{case Bool(b)=>b}.getOrElse(d)
+
+                val begin=int("begin_shape_index")
+                val end=int("end_shape_index")
+                val elapsed=edge.obj.get("end_node")
+                  .collect{case o:Obj=>o.obj.get("elapsed_time").collect{case Num(n)=>n}}
+                  .flatten
+                val riding=elapsed match
+                  case Some(t) if t.isFinite && t >= previousElapsed =>
+                    val delta=t-previousElapsed
+                    previousElapsed=t
+                    delta
+                  case _ => Double.NaN
+
+                EdgeAttr(
+                  str("id") match
+                    case "" => s"edge-$idx"
+                    case value => value,
+                  begin,end,
+                  num("length")*1000.0,
+                  num("speed"),
+                  str("road_class"),
+                  str("use"),
+                  str("surface"),
+                  str("cycle_lane"),
+                  bool("unpaved"),
+                  riding
                 )
-              }
+              }.toVector
+              (traced,edges,body)
+          }
+      }
+
+    private def fetchElevations(shape:Vector[Point]):Result[Vector[Double]] =
+      val payload=Obj(
+        "shape"->Arr(shape.map(q=>Obj("lat"->q.lat,"lon"->q.lon))*),
+        "range"->false
+      )
+
+      post("/height",payload).flatMap { case(code,body) =>
+        if code/100 != 2 then Left(s"Valhalla height service failure HTTP $code: ${body.take(500)}")
+        else
+          boundary("decode Valhalla height JSON")(ujson.read(body)).flatMap { json =>
+            json.obj.get("height") match
+              case Some(a:Arr) =>
+                val values=a.arr.toVector.map {
+                  case Num(n) => Right(n)
+                  case arr:Arr if arr.arr.nonEmpty =>
+                    arr.arr.last match
+                      case Num(n) => Right(n)
+                      case other => Left(s"unexpected height element: $other")
+                  case other => Left(s"unexpected height element: $other")
+                }
+                sequence(values).flatMap { elevations =>
+                  if elevations.size != shape.size then
+                    Left(s"invalid elevation response: ${elevations.size} for ${shape.size} shape points")
+                  else if elevations.exists(v => !v.isFinite) then
+                    Left("invalid elevation response: non-finite value")
+                  else Right(elevations)
+                }
+              case _ => Left("Valhalla height response missing height")
+          }
+      }
+
+    def elevations(shape:Vector[Point]):Result[Vector[Double]] =
+      val key=elevationKey(shape)
+      elevationCache.get(key) match
+        case Some(values) =>
+          heightCacheHits+=1
+          Right(values)
+        case None =>
+          heightRequests+=1
+          val fetchStarted=System.nanoTime()
+          val fetched=fetchElevations(shape)
+          heightFetchNanos += System.nanoTime()-fetchStarted
+          fetched.map { values =>
+            elevationCache.update(key,values)
+            values
+          }
+
+
+  def decodePolyline6(s:String):Result[Vector[Point]] =
+    val out=mutable.ArrayBuffer.empty[Point]
+    var index=0
+    var lat=0L
+    var lon=0L
+    var problem:Option[String]=None
+
+    def nextDelta():Option[Long] =
+      var result=0L
+      var shift=0
+      var keepReading=true
+      while keepReading && problem.isEmpty do
+        if index >= s.length then
+          problem=Some("truncated polyline6")
+        else
+          val b=s.charAt(index).toInt-63
+          index += 1
+          result |= ((b & 0x1f).toLong << shift)
+          shift += 5
+          keepReading=b >= 0x20
+      if problem.nonEmpty then None
+      else Some(if (result & 1L) != 0 then ~(result >> 1) else result >> 1)
+
+    while index < s.length && problem.isEmpty do
+      (nextDelta(),nextDelta()) match
+        case (Some(dLat),Some(dLon)) =>
+          lat += dLat
+          lon += dLon
+          out += Point(lat/1e6,lon/1e6,0.0)
+        case _ => ()
+
+    problem match
+      case Some(msg) => Left(msg)
+      case None => Right(out.toVector)
+
+
+  def dedupeBoundary(points:Vector[Point]):Vector[Point] =
+    points.foldLeft(Vector.empty[Point])((a,p)=>if a.lastOption.exists(q=>q.lat==p.lat&&q.lon==p.lon) then a else a:+p)
+
+  def attachElevations(shape:Vector[Point],elev:Vector[Double]):Vector[Point] = shape.zip(elev).map{case(p,e)=>p.copy(ele=e)}
+
+  def generateConnector(
+      client:ValhallaClient,
+      fromKey:String,
+      from:Point,
+      toKey:String,
+      to:Point,
+      profile:Profile,
+      protectedCorridors:Vector[ProtectedCorridor],
+      evidence:Vector[EvidenceCorridor],
+      diag:Diagnostics
+  ):Result[Option[Connector]] =
+    diag.generated += 1
+    if diag.generated == 1 || diag.generated % 50 == 0 then
+      appendLiveDebug(
+        s"connector-progress generated=${diag.generated} noRoute=${diag.noRoute} accepted-so-far=${diag.acceptedVariants} rejects=${diag.hardRejects.values.sum} safetyReroutes=${diag.safetyReroutes}"
+      )
+
+    def overlaps(shape:Vector[Point]):Vector[(ProtectedCorridor,Double)] =
+      val safetyShape=corridorSafetyGeometry(shape)
+      val shapeBounds=geoBounds(safetyShape)
+      protectedCorridors.flatMap { c =>
+        if boundsCouldBeWithinTolerance(shapeBounds,c.bounds,AvoidToleranceM) then
+          Some(c -> continuousCoTravel(safetyShape,c.points,AvoidToleranceM))
+        else None
+      }
+
+    val maxSafetyReroutes=math.max(
+      64,
+      protectedCorridors.map(c => math.max(1,c.points.size-1)).sum
+    )
+    var avoidLocations=Vector.empty[Point]
+    var reroutes=0
+    var lastOverlap=""
+
+    def addRouteDerivedBlockers(
+        shape:Vector[Point],
+        bad:Vector[(ProtectedCorridor,Double)]
+    ):Boolean =
+      val safetyShape=corridorSafetyGeometry(shape)
+      lastOverlap=bad.map { case(c,m) => f"${c.label}=$m%.1fm" }.mkString(", ")
+      val detailed=bad.map { case(c,_) =>
+        (c,coTravelBlockPoint(safetyShape,c.points,AvoidToleranceM,from,to))
+      }
+
+      val derived=detailed.flatMap { case(c,p) => p.map(c -> _) }
+      if derived.size < bad.size then
+        diag.reject("protected-corridor-blocker-unavailable")
+        false
+      else
+        val accumulated=appendExactDistinctPoints(avoidLocations,derived.map(_._2))
+        val added=accumulated.size-avoidLocations.size
+        if added<=0 then
+          diag.reject("protected-corridor-no-progress")
+          false
+        else
+          avoidLocations=accumulated
+          diag.safetyReroutes += 1
+          derived.foreach { case(c,_) =>
+            diag.safetyRerouteCorridors(c.label)=diag.safetyRerouteCorridors(c.label)+1
+          }
+          true
+
+    while reroutes <= maxSafetyReroutes do
+      client.route(from,to,profile,avoidLocations) match
+        case Left(problem) =>
+          // Transport/service failures are not legitimate no-route outcomes.
+          return Left(problem)
+
+        case Right(None) =>
+          diag.noRoute += 1
+          return Right(None)
+
+        case Right(Some((routeGeometry,rawSeconds,_))) =>
+          val routeBad=overlaps(routeGeometry).filter(_._2 > AvoidToleranceM)
+          if routeBad.nonEmpty then
+            if !addRouteDerivedBlockers(routeGeometry,routeBad) then
+              diag.safetyBlockedProfiles += 1
+              return Right(None)
+            reroutes += 1
+          else
+            client.traceAttributes(routeGeometry,profile) match
+              case Left(problem) =>
+                // Exact edge_walk is safety evidence; inability to obtain it is fail-closed.
+                return Left(s"exact edge_walk unavailable for $fromKey->$toKey ${profile.id}: $problem")
+
+              case Right((traced,edges,_)) =>
+                val badCorrespondence=edges.exists(
+                  e => e.begin < 0 || e.end < e.begin || e.begin >= traced.size || e.end >= traced.size
+                )
+
+                if traced.size < 2 then
+                  diag.reject("missing-trace-shape")
+                  diag.safetyBlockedProfiles += 1
+                  return Right(None)
+                else if edges.isEmpty then
+                  diag.reject("missing-trace-edges")
+                  diag.safetyBlockedProfiles += 1
+                  return Right(None)
+                else if badCorrespondence then
+                  diag.reject("invalid-edge-shape-correspondence")
+                  diag.safetyBlockedProfiles += 1
+                  return Right(None)
+                else
+                  // Reference corridor authority is the routed /route shape, not
+                  // trace_attributes' matched edge_walk shape. The latter is retained
+                  // exclusively for road/edge safety because its shape can differ
+                  // slightly from the route polyline at graph snapping boundaries.
+                  //
+                  // Re-routing on trace-shape corridor overlap was introduced by the
+                  // greenfield rewrite and changes the connector graph relative to the
+                  // validated canonical planner. Hard protected-corridor enforcement is
+                  // still performed on routeGeometry before scoring and again on the
+                  // dense reconstruction geometry below.
+
+                  // Wall/physics/reconstruction need a dense elevation profile.
+                  // Edge begin/end indices, however, belong to the exact edge_walk
+                  // trace shape. Keep the two geometries separate instead of either
+                  // (a) running wall physics on a sparse trace shape or (b) resampling
+                  // trace geometry and silently invalidating its edge indices.
+                  val processedRoute=resampleConnectorPhysics(routeGeometry,10.0)
+                  client.elevations(processedRoute) match
+                      case Left(problem) =>
+                        return Left(s"route height unavailable for $fromKey->$toKey ${profile.id}: $problem")
+
+                      case Right(routeElevations) =>
+                        client.elevations(traced) match
+                          case Left(problem) =>
+                            // Trace elevation participates in modeled road-run duration.
+                            return Left(s"trace height unavailable for $fromKey->$toKey ${profile.id}: $problem")
+
+                          case Right(traceElevations) =>
+                            val geometry=attachElevations(processedRoute,routeElevations)
+                            val traceGeometry=attachElevations(traced,traceElevations)
+                            val rejects=safetyReasons(edges,traceGeometry)
+                            if rejects.nonEmpty then
+                              rejects.foreach(diag.reject)
+                              diag.safetyBlockedProfiles += 1
+                              return Right(None)
+
+                            val crr=lengthWeightedCrr(edges)
+                            val rider=physics(geometry,crr)
+                            val wall=wallMetrics(geometry,rider)
+
+                            if wall.max30Pct >= 27.0 then
+                              diag.reject("max30>=27")
+                              diag.safetyBlockedProfiles += 1
+                              return Right(None)
+                            else if wall.max100Pct >= 20.0 then
+                              diag.reject("max100>=20")
+                              diag.safetyBlockedProfiles += 1
+                              return Right(None)
+                            else if wall.above180Seconds >= 90.0 then
+                              diag.reject("above180>=90s")
+                              diag.safetyBlockedProfiles += 1
+                              return Right(None)
+
+                            val (floor,apps)=applyEvidence(s"$fromKey -> $toKey",geometry,wall,evidence)
+                            if apps.nonEmpty then diag.evidenceApplied += 1
+                            val physical=wall.physicalSeverity
+                            val effective=math.max(physical,floor)
+
+                            // Production reference semantics: real-ride evidence
+                            // is safety-active. An effective wall at or above the
+                            // hard envelope is forbidden, not a new >1 wall class.
+                            if effective >= 1.0 - 1e-9 then
+                              diag.reject("effective-wall>=1")
+                              diag.safetyBlockedProfiles += 1
+                              return Right(None)
+
+                            val stress=roadStress(edges,traceGeometry)
+
+                            if !stress.isFinite then
+                              diag.reject("nonfinite-road-time")
+                              diag.safetyBlockedProfiles += 1
+                              return Right(None)
+
+                            val finalOverlaps=overlaps(geometry)
+                            val hardFinal=finalOverlaps.filter(_._2 > AvoidToleranceM)
+                            if hardFinal.nonEmpty then
+                              // Resampling/elevation do not move the routed horizontal line.
+                              hardFinal.foreach { case(c,_) => diag.reject("protected-final:"+c.label) }
+                              diag.safetyBlockedProfiles += 1
+                              return Right(None)
+
+                            val warnings=finalOverlaps.collect {
+                              case(c,m) if m>0.0 && m<=AvoidToleranceM => c.label -> m
+                            }
+                            val provenance=
+                              Vector(
+                                s"route profile=${profile.id}",
+                                s"route-derived blockers=${avoidLocations.size}",
+                                s"processed-route-spacing=10m-segmentwise-reference",
+                                s"physicalWall=$physical",
+                                s"evidenceFloor=$floor"
+                              ) ++
+                                apps.flatMap(
+                                  a => Vector(s"real-ride ${a.corridor} severity=${a.severity}") ++ a.details
+                                )
+
+
+                            diag.acceptedVariants += 1
+                            return Right(
+                              Some(
+                                Connector(
+                                  s"$fromKey->$toKey@${profile.id}",
+                                  fromKey,toKey,profile,geometry,traceGeometry,rawSeconds,edges,
+                                  stress,ascent(geometry),crr,rider,wall,
+                                  physical,floor,effective,apps,warnings,provenance
+                                )
+                              )
+                            )
+
+    diag.reject("protected-corridor-reroute-cap")
+    diag.safetyBlockedProfiles += 1
+    appendLiveDebug(
+      s"connector-safety-cap from=$fromKey to=$toKey profile=${profile.id} cap=$maxSafetyReroutes last=$lastOverlap"
+    )
+    Right(None)
+
+
+
+  // The canonical production planner optimizes transfer time using the
+  // rider/terrain physics model. Valhalla trip.summary.time is retained only
+  // as routing provenance/diagnostic data.
+  def connectorTransferSeconds(c:Connector):Double = c.rider.duration
+
+  def connectorDominates(a:Connector,b:Connector):Boolean =
+    val sameAscent=java.lang.Double.doubleToLongBits(a.ascentM)==java.lang.Double.doubleToLongBits(b.ascentM)
+    if !sameAscent then false
+    else
+      val ar=a.rider; val br=b.rider
+      val noWorse=connectorTransferSeconds(a)<=connectorTransferSeconds(b) && a.roadStressSeconds<=b.roadStressSeconds && a.effectiveWall<=b.effectiveWall && ar.t120<=br.t120 && ar.t140<=br.t140 && ar.t160<=br.t160 && ar.candHard<=br.candHard && ar.spike<=br.spike && streakNoWorse(ar.streak120,br.streak120) && streakNoWorse(ar.streak140,br.streak140)
+      val strict=connectorTransferSeconds(a)<connectorTransferSeconds(b) || a.roadStressSeconds<b.roadStressSeconds || a.effectiveWall<b.effectiveWall || ar.t120<br.t120 || ar.t140<br.t140 || ar.t160<br.t160 || ar.spike<br.spike || streakStrict(ar.streak120,br.streak120) || streakStrict(ar.streak140,br.streak140)
+      noWorse&&strict
+
+  def streakNoWorse(a:Streak,b:Streak):Boolean = a.prefix<=b.prefix && a.suffix<=b.suffix && a.localMax<=b.localMax && (!a.allAbove || b.allAbove) && a.duration<=b.duration
+  def streakStrict(a:Streak,b:Streak):Boolean = a.prefix<b.prefix || a.suffix<b.suffix || a.localMax<b.localMax || (!a.allAbove&&b.allAbove) || a.duration<b.duration
+
+  case class EdgeSemanticKey(
+      id:String,
+      begin:Int,
+      end:Int,
+      lengthBits:Long,
+      speedBits:Long,
+      roadClass:String,
+      use:String,
+      surface:String,
+      cycleLane:String,
+      unpaved:Boolean,
+      ridingSecondsBits:Long
+  )
+  case class ConnectorSemanticKey(
+      rawSecondsBits:Long,
+      geometryBits:Vector[(Long,Long,Long)],
+      traceGeometryBits:Vector[(Long,Long,Long)],
+      edges:Vector[EdgeSemanticKey]
+  )
+
+  def doubleBits(x:Double):Long=java.lang.Double.doubleToLongBits(x)
+
+  def semanticKey(c:Connector):ConnectorSemanticKey =
+    ConnectorSemanticKey(
+      rawSecondsBits=doubleBits(c.rawSeconds),
+      geometryBits=c.geometry.map(p => (doubleBits(p.lat),doubleBits(p.lon),doubleBits(p.ele))),
+      traceGeometryBits=c.traceGeometry.map(p => (doubleBits(p.lat),doubleBits(p.lon),doubleBits(p.ele))),
+      edges=c.edges.map { e =>
+        EdgeSemanticKey(
+          e.id,e.begin,e.end,doubleBits(e.lengthM),doubleBits(e.speedKph),
+          e.roadClass,e.use,e.surface,e.cycleLane,e.unpaved,doubleBits(e.ridingSeconds)
+        )
+      }
+    )
+
+  def pruneConnectors(in:Vector[Connector]):Vector[Connector] =
+    // Semantic dedupe is deliberately bit-exact.  Near-identical geometry is
+    // not equality and must reach exact Pareto dominance instead of being
+    // rounded away here.
+    val dedup=in.groupBy(semanticKey).values.map(_.minBy(_.profile.id)).toVector.sortBy(_.id)
+    dedup.filterNot(b=>dedup.exists(a=>a.id!=b.id && connectorDominates(a,b)))
+
+  def buildGraph(
+      client:ValhallaClient,
+      trails:Vector[Trail],
+      avoids:Vector[Gpx],
+      evidence:Vector[EvidenceCorridor],
+      diag:Diagnostics
+  ):Result[Map[(String,String),Vector[Connector]]] =
+    case class Task(fromKey:String,from:Point,toKey:String,to:Point,profile:Profile)
+
+    // Mandatory technical GPXs and explicit avoid GPXs are both protected
+    // from connector reuse.  Only mandatory GPXs participate in the solver.
+    val protectedCorridors=
+      trails.map(t => ProtectedCorridor(t.name,t.points,"mandatory")) ++
+        avoids.map(a => ProtectedCorridor(a.name,a.points,"avoid"))
+
+    val tasks=
+      (
+        trails.flatMap(t => Profiles.map(p => Task("START",Start,t.name,t.points.head,p))) ++
+        trails.flatMap { fromTrail =>
+          trails.filterNot(_.name == fromTrail.name).flatMap { toTrail =>
+            Profiles.map(p => Task(fromTrail.name,fromTrail.points.last,toTrail.name,toTrail.points.head,p))
           }
         } ++
-        trails.indices.flatMap { i =>
-          correctedFinishVariantCache(i).map { connector =>
-            LabeledUsefulConnector(
-              s"${trails(i).name} -> ENDPOINT",
-              connector
+        trails.flatMap { trail =>
+          Profiles.flatMap { p =>
+            Vector(
+              Task(trail.name,trail.points.last,"FINISH_LOOP",LoopFinish,p),
+              Task(trail.name,trail.points.last,"FINISH_P2P",P2PFinish,p)
             )
           }
         }
-    ).toVector
+      ).toVector
 
+    val raw=mutable.Map.empty[(String,String),mutable.ArrayBuffer[Connector]]
 
-  require(
-    correctedUsefulConnectorVariants.nonEmpty,
-    "No locally useful connector variants survived the corrected road/wall safety matrix."
-  )
-
-  def correctedAllowedAtWallSeverity(connector: Connector, maxSeverity: Double): Boolean =
-    !effectiveConnectorForbidden(
-      connector
-    ) &&
-      effectiveConnectorWallSeverity(
-        connector
-      ) <= maxSeverity + 1e-9
-
-  def correctedFullMandatoryRouteFeasibleAtSeverity(maxSeverity: Double): Boolean =
-    def key(mask: Int, last: Int): Long =
-      (mask.toLong << 32) | (last.toLong & 0xffffffffL)
-
-    def keyMask(value: Long): Int =
-      (value >>> 32).toInt
-
-    def keyLast(value: Long): Int =
-      value.toInt
-
-    var current = mutable.HashSet.empty[Long]
-    trails.indices.foreach { i =>
-      if trailPositionAllowed(
-            i,
-            1
-          ) &&
-          correctedStartVariantCache(i).exists(
-            connector =>
-              correctedAllowedAtWallSeverity(connector, maxSeverity)
-          )
-      then
-        current +=
-          key(trailBit(i), i)
-    }
-    var layer = 1
-    while layer < trailCount &&
-        current.nonEmpty
-    do
-      val nextStates = mutable.HashSet.empty[Long]
-      current.foreach { packed =>
-        val mask = keyMask(packed)
-        val last = keyLast(packed)
-        trails.indices.foreach { next =>
-          if (mask & trailBit(next)) == 0 &&
-              trailTransitionAllowed(
-                last,
-                next,
-                layer + 1
-              ) &&
-              correctedBetweenVariantCache(last)(next).exists(
-                connector =>
-                  correctedAllowedAtWallSeverity(connector, maxSeverity)
-              )
-          then
-            nextStates +=
-              key(mask | trailBit(next), next)
+    tasks.foldLeft[Result[Unit]](Right(())) {
+      case (Left(problem),_) => Left(problem)
+      case (Right(_),task) =>
+        generateConnector(
+          client,task.fromKey,task.from,task.toKey,task.to,task.profile,protectedCorridors,evidence,diag
+        ).map {
+          case Some(connector) =>
+            raw.getOrElseUpdate((task.fromKey,task.toKey),mutable.ArrayBuffer.empty) += connector
+          case None => ()
         }
-      }
-      current = nextStates
-      layer +=
-        1
-    current.exists { packed =>
-      val mask = keyMask(packed)
-      val last = keyLast(packed)
-      mask == fullMask &&
-        correctedFinishVariantCache(last).exists(
-          connector =>
-            correctedAllowedAtWallSeverity(connector, maxSeverity)
-        )
+    }.map { _ =>
+      val pruned=raw.view.mapValues(v => pruneConnectors(v.toVector)).toMap
+      diag.retained=pruned.values.map(_.size).sum
+      pruned
     }
 
-  val correctedSeveritySorted =
-    correctedUsefulConnectorVariants.sortBy(
-      item =>
-        effectiveConnectorWallSeverity(item.connector)
-    )
 
-  val correctedSeverityBuckets = mutable.ArrayBuffer.empty[
-      mutable.ArrayBuffer[
-        LabeledUsefulConnector
-      ]
-    ]
-  correctedSeveritySorted.foreach { item =>
-    val severity = effectiveConnectorWallSeverity(item.connector)
-    correctedSeverityBuckets.lastOption match
-      case Some(bucket) =>
-        val bucketMin = effectiveConnectorWallSeverity(bucket.head.connector)
-        if severity - bucketMin <= WallSeverityMergeEps + 1e-9
-        then
-          bucket +=
-            item
-        else
-          correctedSeverityBuckets +=
-            mutable.ArrayBuffer(item)
-      case None =>
-        correctedSeverityBuckets +=
-          mutable.ArrayBuffer(item)
-  }
 
-  val correctedRawSeverityGroups =
-    correctedSeverityBuckets.toVector.zipWithIndex.map {
-      case (
-            bucket,
-            idx
-          ) =>
-        val members = bucket.toVector
-        val severities =
-          members.map { item =>
-              effectiveConnectorWallSeverity(item.connector)
-          }
-        (idx + 1, severities.min, severities.max, members)
-    }
+  def rawDominates(a:RawLabel,b:RawLabel):Boolean =
+    a.wall<=b.wall && a.transfer<=b.transfer && (a.wall<b.wall || a.transfer<b.transfer)
 
-  val correctedWallSeverityGroups =
-    correctedRawSeverityGroups.zipWithIndex.map {
-      case (
-            (
-              ordinal,
-              minSeverity,
-              maxSeverity,
-              members
-            ),
-            idx
-          ) =>
-        val cumulativeMembers =
-          correctedUsefulConnectorVariants.filter { item =>
-              effectiveConnectorWallSeverity(
-                item.connector
-              ) <= maxSeverity + 1e-9
-          }
-        val cumulativePairs =
-          cumulativeMembers.map(
-            _.label
-          ).toSet
-        val previousPairs =
-          if idx == 0 then
-            Set.empty[String]
-          else
-            val previousMax =
-              correctedRawSeverityGroups(
-                idx - 1
-              )._3
-            correctedUsefulConnectorVariants
-              .filter { item =>
-                  effectiveConnectorWallSeverity(
-                    item.connector
-                  ) <= previousMax + 1e-9
-              }
-              .map(_.label)
-              .toSet
-        WallSeverityGroup(
-          ordinal = ordinal,
-          minSeverity = minSeverity,
-          maxSeverity = maxSeverity,
-          members = members,
-          fullRouteFeasible =
-            correctedFullMandatoryRouteFeasibleAtSeverity(
-              maxSeverity
-            ),
-          cumulativeUsefulVariants = cumulativeMembers.size,
-          cumulativeReachablePairs = cumulativePairs.size,
-          newlyReachablePairs =
-            (
-              cumulativePairs --
-                previousPairs
-            ).size
-        )
-    }
+  def insertRaw(front:mutable.ArrayBuffer[RawLabel],cand:RawLabel,trails:Vector[Trail]):Unit =
+    val equal=front.indexWhere(x=>x.wall==cand.wall&&x.transfer==cand.transfer)
+    if equal>=0 then
+      if cand.signature(trails)<front(equal).signature(trails) then front(equal)=cand
+    else if !front.exists(x=>rawDominates(x,cand)) then
+      val kept=front.filterNot(x=>rawDominates(cand,x)); front.clear(); front++=kept; front+=cand
 
-  val correctedFeasibleWallGroups = correctedWallSeverityGroups.filter(_.fullRouteFeasible)
-
-  if correctedFeasibleWallGroups.isEmpty then
-    val reason =
-      "No complete all-mandatory-trails route exists after road safety, explicit avoid corridors and production-strength real-ride wall evidence."
-    Console.err.println(s"Planner stopped cleanly: $reason")
-    writeEarlyFailureReports(reason, phase = "post-evidence corrected wall reachability")
-    return
-
-  val correctedC1Group = correctedFeasibleWallGroups.head
-
-  val correctedC3Group = correctedFeasibleWallGroups.last
-
-  val correctedC2Group =
-    val interior = correctedFeasibleWallGroups.filter { group =>
-        group.ordinal != correctedC1Group.ordinal &&
-          group.ordinal != correctedC3Group.ordinal
-      }
-    if interior.isEmpty then
-      correctedC3Group
-    else
-      val targetUsefulVariants =
-        (
-          correctedC1Group.cumulativeUsefulVariants +
-            correctedC3Group.cumulativeUsefulVariants
-        ).toDouble /
-          2.0
-      interior.minBy { group =>
-        (
-          math.abs(
-            group.cumulativeUsefulVariants.toDouble -
-              targetUsefulVariants
-          ),
-          -group.newlyReachablePairs,
-          group.ordinal
-        )
-      }
-
-  val correctedSelectedWallGroups = Vector(correctedC1Group, correctedC2Group, correctedC3Group)
-
-  val correctedWallProfileCeilings = correctedSelectedWallGroups.map(_.maxSeverity)
-
-  def finalEffectiveConnectorWallClass(connector: Connector): Int =
-    val severity = effectiveConnectorWallSeverity(connector)
-    if effectiveConnectorForbidden(connector)
-    then
-      MaxOfferedWallClass + 1
-    else
-      correctedWallProfileCeilings.indexWhere(
-        ceiling =>
-          severity <= ceiling + 1e-9
-      ) match
-        case -1 =>
-          MaxOfferedWallClass + 1
-        case idx =>
-          idx + 1
-
-  case class RiderEndpointMode(startEndpoint: Int, finishEndpoint: Int):
-    def text: String =
-      s"${endpointNames(startEndpoint - 1)} -> ${endpointNames(finishEndpoint - 1)}"
-
-  // Sparse exact-DP state: current mandatory mask + last mandatory trail.
-  // Diversity-prefix bits belonged only to the removed forbidden-order solver.
-  def packedStateKey(mask: Int, last: Int): Long =
-    ((mask.toLong & 0xffffffffL) << 32) |
-      (last.toLong & 0xffffffffL)
-
-  def packedStateMask(key: Long): Int =
-    (key >>> 32).toInt
-
-  def packedStateLast(key: Long): Int =
-    key.toInt
-
-  // Lexicographic tie-break used only by exact diagnostic DP.
-  def terrainOrderLexLess(a: Vector[Int], b: Vector[Int]): Boolean =
-    val firstDifference = a.indices.find(i => a(i) != b(i))
-    firstDifference match
-      case Some(i) => a(i) < b(i)
-      case None    => a.size < b.size
-
-  val terrainFrontierEndpointModes = Vector(
-    "LOOP" -> RiderEndpointMode(startEndpoint = 2, finishEndpoint = 2),
-    "P2P" -> RiderEndpointMode(startEndpoint = 2, finishEndpoint = 1)
-  )
-
-  // ---------------------------------------------------------------------
-  // EXACT TERRAIN FRONTIER
-  //
-  // Hard ordering contract at terrain-discovery time:
-  //   - at least ONE non-demanding mandatory trail before the first demanding
-  //     technical descent;
-  //   - second warm-up is NOT hard;
-  //   - demanding adjacency is NOT hard;
-  //   - demanding trail may be last.
-  //
-  // Human-quality preferences are applied later inside the calibrated shared
-  // +60 s budget. Terrain discovery itself remains exact transfer-fastest.
-  // ---------------------------------------------------------------------
-
-  def terrainPositionAllowed(trailIndex: Int, oneBasedPosition: Int): Boolean =
-    !isSteepTwistyTrail(trailIndex) || oneBasedPosition > 1
-
-  def terrainTransitionAllowed(
-      previousTrailIndex: Int,
-      nextTrailIndex: Int,
-      nextOneBasedPosition: Int
-  ): Boolean =
-    terrainPositionAllowed(nextTrailIndex, nextOneBasedPosition)
-
-  case class TerrainFrontierRoute(
-      transferSeconds: Double,
-      order: Vector[Int],
-      connectors: Vector[Connector]
-  ):
-    def maxUsedSeverity: Double =
-      connectors.map(effectiveConnectorWallSeverity).foldLeft(0.0)(math.max)
-
-  case class TerrainFrontierSeries(
-      label: String,
-      endpointMode: RiderEndpointMode,
-      rows: Vector[(Double, Option[TerrainFrontierRoute])]
-  )
-
-  def terrainFrontierStateBetter(candidate: TerrainFrontierRoute, existing: TerrainFrontierRoute): Boolean =
-    candidate.transferSeconds < existing.transferSeconds - 1e-9 ||
-      (
-        math.abs(candidate.transferSeconds - existing.transferSeconds) <= 1e-9 &&
-          terrainOrderLexLess(candidate.order, existing.order)
-      )
-
-  def bestTerrainConnector(candidates: Vector[Connector]): Option[Connector] =
-    candidates.minByOption { connector =>
-      (
-        connector.physicsSeconds,
-        effectiveConnectorWallSeverity(connector),
-        connector.ascentM,
-        connector.route.lengthKm,
-        connector.candidateComfortPenaltySeconds
-      )
-    }
-
-  def exactFastestTerrainAtSeverity(
-      maxSeverity: Double,
-      endpointMode: RiderEndpointMode
-  ): Option[TerrainFrontierRoute] =
-    def startConnector(trailIndex: Int): Option[Connector] =
-      bestTerrainConnector(
-        correctedStartVariantCache(trailIndex)
-          .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-          .filter(connector => endpointNumber(connector.route.from) == endpointMode.startEndpoint)
-      )
-
-    def betweenConnector(fromTrail: Int, toTrail: Int): Option[Connector] =
-      bestTerrainConnector(
-        correctedBetweenVariantCache(fromTrail)(toTrail)
-          .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-      )
-
-    def finishConnector(trailIndex: Int): Option[Connector] =
-      bestTerrainConnector(
-        correctedFinishVariantCache(trailIndex)
-          .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-          .filter(connector => endpointNumber(connector.route.to) == endpointMode.finishEndpoint)
-      )
-
-    var current = mutable.LongMap.empty[TerrainFrontierRoute]
+  def rawDp(mode:Mode,trails:Vector[Trail],graph:Map[(String,String),Vector[Connector]]):Vector[RawTerminal] =
+    val n=trails.size; val states=mutable.Map.empty[(Int,Int),mutable.ArrayBuffer[RawLabel]]
     trails.indices.foreach { i =>
-      if terrainPositionAllowed(i, 1) then
-        startConnector(i).foreach { connector =>
-          current.update(
-            packedStateKey(trailBit(i), i),
-            TerrainFrontierRoute(
-              transferSeconds = connector.physicsSeconds,
-              order = Vector(i),
-              connectors = Vector(connector)
-            )
-          )
+      if !trails(i).demanding.demanding then
+        graph.getOrElse(("START",trails(i).name),Vector.empty).foreach { c =>
+          val l=RawLabel(1<<i,i,c.effectiveWall,connectorTransferSeconds(c),c.roadStressSeconds,Vector(i),Vector(c)); insertRaw(states.getOrElseUpdate((l.mask,l.last),mutable.ArrayBuffer.empty),l,trails)
         }
     }
-
-    var layer = 1
-    while layer < trailCount && current.nonEmpty do
-      val nextLayer = mutable.LongMap.empty[TerrainFrontierRoute]
-      current.foreach { case (packed, state) =>
-        val mask = packedStateMask(packed)
-        val last = packedStateLast(packed)
-        var next = 0
-        while next < trails.size do
-          if (mask & trailBit(next)) == 0 &&
-              terrainTransitionAllowed(last, next, layer + 1)
-          then
-            betweenConnector(last, next).foreach { connector =>
-              val candidate = TerrainFrontierRoute(
-                transferSeconds = state.transferSeconds + connector.physicsSeconds,
-                order = state.order :+ next,
-                connectors = state.connectors :+ connector
-              )
-              val key = packedStateKey(mask | trailBit(next), next)
-              nextLayer.get(key) match
-                case Some(existing) if !terrainFrontierStateBetter(candidate, existing) => ()
-                case _ => nextLayer.update(key, candidate)
+    var bits=1
+    while bits<n do
+      val snapshot=states.toVector.filter{case((mask,_),_)=>Integer.bitCount(mask)==bits}
+      snapshot.foreach { case((mask,last),labels) =>
+        trails.indices.filter(i=>(mask&(1<<i))==0).foreach { nxt =>
+          labels.foreach { l =>
+            graph.getOrElse((trails(last).name,trails(nxt).name),Vector.empty).foreach { c =>
+              val nl=RawLabel(mask|(1<<nxt),nxt,math.max(l.wall,c.effectiveWall),l.transfer+connectorTransferSeconds(c),l.road+c.roadStressSeconds,l.order:+nxt,l.connectors:+c)
+              insertRaw(states.getOrElseUpdate((nl.mask,nl.last),mutable.ArrayBuffer.empty),nl,trails)
             }
-          next += 1
-      }
-      current = nextLayer
-      layer += 1
-
-    var best = Option.empty[TerrainFrontierRoute]
-    current.foreach { case (packed, prefix) =>
-      if packedStateMask(packed) == fullMask then
-        val last = packedStateLast(packed)
-        finishConnector(last).foreach { connector =>
-          val candidate = TerrainFrontierRoute(
-            transferSeconds = prefix.transferSeconds + connector.physicsSeconds,
-            order = prefix.order,
-            connectors = prefix.connectors :+ connector
-          )
-          best match
-            case Some(existing) if !terrainFrontierStateBetter(candidate, existing) => ()
-            case _ => best = Some(candidate)
-        }
-    }
-    best
-
-  val exactWallBreakpointSeverities: Vector[Double] =
-    correctedUsefulConnectorVariants
-      .map(item => effectiveConnectorWallSeverity(item.connector))
-      .filter(severity => Format.finite(severity) && severity < 1.0 - 1e-9)
-      .distinct
-      .sorted
-
-  println("[3/4   0.0%] Solving exact terrain frontier and rider-quality routes.")
-  val exactWallBreakpointSeries =
-    terrainFrontierEndpointModes.map { case (modeLabel, endpointMode) =>
-      TerrainFrontierSeries(
-        label = s"$modeLabel / WARMUP1_HARD",
-        endpointMode = endpointMode,
-        rows = exactWallBreakpointSeverities.map { severity =>
-          severity -> exactFastestTerrainAtSeverity(severity, endpointMode)
-        }
-      )
-    }
-
-  val timingTerrainFrontierDoneNs = System.nanoTime()
-  println("[3/4  25.0%] Exact terrain frontier ready; deriving RAW-terrain product classes.")
-
-  // ---------------------------------------------------------------------
-  // MIGRATION REFERENCE + V5 ROUTE METRICS
-  //
-  // HumanQualityRoute is the shared exact route representation for candidate
-  // comfort and the temporary +60 migration baseline. The baseline now uses
-  // only V5 candidate-comfort resources; fixed legacy power thresholds are gone.
-  // It remains only as a temporary depth/no-regression reference for the three
-  // selected class/endpoint pairs and does not discover classes/endpoints.
-  // ---------------------------------------------------------------------
-
-  case class HumanQualityRoute(
-      mask: Int,
-      last: Int,
-      transferSeconds: Double,
-      order: Vector[Int],
-      connectors: Vector[Connector],
-      warmup2Penalty: Int,
-      demandingAdjacencyCount: Int,
-      climbShape: ClimbShape,
-      roadStressSeconds: Double,
-      candidateComfortSufferingSeconds: Double = 0.0,
-      candidateLongestLowSeconds: Double = 0.0,
-      candidateLongestHighSeconds: Double = 0.0,
-      candidateSpikeLoadSeconds: Double = 0.0
-  )
-
-  case class ProductRideQuality(
-      maxCountedAscentM: Double,
-      upwardViolationM: Double,
-      roughnessM: Double,
-      totalCountedAscentM: Double,
-      roadStressSeconds: Double,
-      candidateComfortSufferingSeconds: Double,
-      downhillHandlingSeconds: Double,
-      pathPenaltySeconds: Double
-  )
-
-  // Temporary migration baseline for exactly the three selected class/endpoint
-  // pairs. It uses only V5 candidate-comfort metrics and no legacy fixed-power
-  // suffering/streak/spike semantics.
-  val MigrationReferenceSlackSeconds = 60.0
-
-  // Operational exact-search ceiling for the conservative V5 promotion gate.
-  // This is not a preference threshold. Promotion fails closed if no valid
-  // strict improvement is found inside this search horizon.
-  val PromotionSearchSlackCeilingSeconds = 600.0
-
-
-  def demandingAdjacencyCount(order: Vector[Int]): Int =
-    order.sliding(2).count {
-      case Vector(a, b) => isSteepTwistyTrail(a) && isSteepTwistyTrail(b)
-      case _            => false
-    }
-
-  def warmupPrefixCount(order: Vector[Int]): Int =
-    order.takeWhile(i => !isSteepTwistyTrail(i)).size
-
-  def routeMaxUsedWallSeverity(route: HumanQualityRoute): Double =
-    route.connectors
-      .map(effectiveConnectorWallSeverity)
-      .foldLeft(0.0)(math.max)
-
-  def productRideQuality(route: HumanQualityRoute): ProductRideQuality =
-    ProductRideQuality(
-      maxCountedAscentM = route.climbShape.maxAscentM,
-      upwardViolationM = route.climbShape.upwardViolationM,
-      roughnessM = route.climbShape.roughnessM,
-      totalCountedAscentM = route.climbShape.totalAscentM,
-      roadStressSeconds = route.roadStressSeconds,
-      candidateComfortSufferingSeconds = route.candidateComfortSufferingSeconds,
-      downhillHandlingSeconds = route.connectors.map(_.downhillHandlingSeconds).sum,
-      pathPenaltySeconds = route.connectors.map(_.transferQualityPenaltySeconds).sum
-    )
-
-  def migrationReferencePreferenceCompare(
-      a: HumanQualityRoute,
-      b: HumanQualityRoute
-  ): Int =
-    def cmpInt(x: Int, y: Int): Int =
-      java.lang.Integer.compare(x, y)
-
-    def cmpDouble(x: Double, y: Double): Int =
-      java.lang.Double.compare(x, y)
-
-    var c = cmpInt(a.warmup2Penalty, b.warmup2Penalty)
-    if c == 0 then
-      c = cmpInt(a.demandingAdjacencyCount, b.demandingAdjacencyCount)
-    if c == 0 then
-      c = cmpDouble(a.climbShape.maxAscentM, b.climbShape.maxAscentM)
-    if c == 0 then
-      c = cmpDouble(a.climbShape.upwardViolationM, b.climbShape.upwardViolationM)
-    if c == 0 then
-      c = cmpDouble(
-        a.candidateComfortSufferingSeconds,
-        b.candidateComfortSufferingSeconds
-      )
-    if c == 0 then
-      c = cmpDouble(a.candidateLongestHighSeconds, b.candidateLongestHighSeconds)
-    if c == 0 then
-      c = cmpDouble(a.candidateLongestLowSeconds, b.candidateLongestLowSeconds)
-    if c == 0 then
-      c = cmpDouble(a.candidateSpikeLoadSeconds, b.candidateSpikeLoadSeconds)
-    if c == 0 then
-      c = cmpDouble(a.climbShape.roughnessM, b.climbShape.roughnessM)
-    if c == 0 then
-      c = cmpDouble(a.roadStressSeconds, b.roadStressSeconds)
-    if c == 0 then
-      c = cmpDouble(a.transferSeconds, b.transferSeconds)
-    if c == 0 then
-      c =
-        a.order
-          .map(_ + 1)
-          .mkString(",")
-          .compareTo(
-            b.order
-              .map(_ + 1)
-              .mkString(",")
-          )
-    c
-
-  def migrationReferencePreferenceBetterOrEqual(
-      a: HumanQualityRoute,
-      b: HumanQualityRoute
-  ): Boolean =
-    migrationReferencePreferenceCompare(a, b) <= 0
-
-
-  case class HumanQualityShapeMemory(
-      phase: Int,
-      lastAscentBits: Long,
-      lastDeltaBits: Long
-  )
-
-  def humanQualityShapeMemory(shape: ClimbShape): HumanQualityShapeMemory =
-    shape.valuesM.size match
-      case 0 =>
-        HumanQualityShapeMemory(0, 0L, 0L)
-      case 1 =>
-        HumanQualityShapeMemory(
-          1,
-          java.lang.Double.doubleToLongBits(shape.valuesM.last),
-          0L
-        )
-      case _ =>
-        HumanQualityShapeMemory(
-          2,
-          java.lang.Double.doubleToLongBits(shape.valuesM.last),
-          java.lang.Double.doubleToLongBits(shape.lastDeltaM.getOrElse(0.0))
-        )
-
-  def sameHumanQualityMemory(a: HumanQualityRoute, b: HumanQualityRoute): Boolean =
-    humanQualityShapeMemory(a.climbShape) == humanQualityShapeMemory(b.climbShape)
-
-  def migrationReferenceDominates(a: HumanQualityRoute, b: HumanQualityRoute): Boolean =
-    sameHumanQualityMemory(a, b) &&
-      a.warmup2Penalty <= b.warmup2Penalty &&
-      a.demandingAdjacencyCount <= b.demandingAdjacencyCount &&
-      a.climbShape.maxAscentM <= b.climbShape.maxAscentM + 1e-9 &&
-      a.climbShape.upwardViolationM <= b.climbShape.upwardViolationM + 1e-9 &&
-      a.candidateComfortSufferingSeconds <=
-        b.candidateComfortSufferingSeconds + 1e-9 &&
-      a.candidateLongestLowSeconds <= b.candidateLongestLowSeconds + 1e-9 &&
-      a.candidateLongestHighSeconds <= b.candidateLongestHighSeconds + 1e-9 &&
-      a.candidateSpikeLoadSeconds <= b.candidateSpikeLoadSeconds + 1e-9 &&
-      a.climbShape.roughnessM <= b.climbShape.roughnessM + 1e-9 &&
-      a.roadStressSeconds <= b.roadStressSeconds + 1e-9 &&
-      a.transferSeconds <= b.transferSeconds + 1e-9
-
-  case class SeverityCompletionFloor(
-      minIncomingByTrail: Vector[Double],
-      finishByTrail: Vector[Double]
-  )
-
-  def connectorMinSeconds(candidates: Vector[Connector]): Double =
-    candidates.map(_.physicsSeconds).minOption.getOrElse(Double.PositiveInfinity)
-
-  def severityCompletionFloor(
-      maxSeverity: Double,
-      endpointMode: RiderEndpointMode
-  ): SeverityCompletionFloor =
-    val minIncoming =
-      trails.indices.map { target =>
-        trails.indices
-          .filter(_ != target)
-          .map { source =>
-            connectorMinSeconds(
-              correctedBetweenVariantCache(source)(target)
-                .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-            )
           }
-          .filter(Format.finite)
-          .minOption
-          .getOrElse(Double.PositiveInfinity)
-      }.toVector
-    val finishes =
-      trails.indices.map { trailIndex =>
-        connectorMinSeconds(
-          correctedFinishVariantCache(trailIndex)
-            .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-            .filter(connector => endpointNumber(connector.route.to) == endpointMode.finishEndpoint)
-        )
-      }.toVector
-    SeverityCompletionFloor(minIncoming, finishes)
-
-  def severityCompletionLowerBound(
-      floor: SeverityCompletionFloor,
-      mask: Int,
-      last: Int
-  ): Double =
-    if mask == fullMask then
-      floor.finishByTrail(last)
-    else
-      var sum = 0.0
-      var bestFinish = Double.PositiveInfinity
-      var next = 0
-      while next < trails.size do
-        if (mask & trailBit(next)) == 0 then
-          val incoming = floor.minIncomingByTrail(next)
-          if !Format.finite(incoming) then
-            return Double.PositiveInfinity
-          sum += incoming
-          bestFinish = math.min(bestFinish, floor.finishByTrail(next))
-        next += 1
-      if !Format.finite(bestFinish) then Double.PositiveInfinity
-      else sum + bestFinish
-
-  def rawChangedFrontierRows(
-      series: TerrainFrontierSeries
-  ): Vector[(Double, TerrainFrontierRoute)] =
-    val out = Vector.newBuilder[(Double, TerrainFrontierRoute)]
-    var previousReachable = Option.empty[TerrainFrontierRoute]
-    series.rows.foreach { case (severity, result) =>
-      result.foreach { current =>
-        val changed =
-          previousReachable match
-            case None => true
-            case Some(previous) =>
-              math.abs(previous.transferSeconds - current.transferSeconds) > 1e-9 ||
-                previous.order != current.order
-        if changed then
-          out += ((severity, current))
-        previousReachable = Some(current)
-      }
-    }
-    out.result()
-
-  def exactMigrationReferenceAtSeverity(
-      maxSeverity: Double,
-      endpointMode: RiderEndpointMode,
-      rawFastest: TerrainFrontierRoute,
-      qualitySlackSeconds: Double
-  ): HumanQualityRoute =
-    require(
-      qualitySlackSeconds >= 0.0 && Format.finite(qualitySlackSeconds),
-      s"Human-quality slack must be finite and non-negative, got $qualitySlackSeconds"
-    )
-    val budgetSeconds = rawFastest.transferSeconds + qualitySlackSeconds
-    val completionFloor = severityCompletionFloor(maxSeverity, endpointMode)
-
-    def startVariants(trailIndex: Int): Vector[Connector] =
-      correctedStartVariantCache(trailIndex)
-        .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-        .filter(connector => endpointNumber(connector.route.from) == endpointMode.startEndpoint)
-
-    def betweenVariants(fromTrail: Int, toTrail: Int): Vector[Connector] =
-      correctedBetweenVariantCache(fromTrail)(toTrail)
-        .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-
-    def finishVariants(trailIndex: Int): Vector[Connector] =
-      correctedFinishVariantCache(trailIndex)
-        .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-        .filter(connector => endpointNumber(connector.route.to) == endpointMode.finishEndpoint)
-
-
-    def canFinish(route: HumanQualityRoute): Boolean =
-      val remaining =
-        severityCompletionLowerBound(
-          completionFloor,
-          route.mask,
-          route.last
-        )
-      Format.finite(remaining) &&
-        route.transferSeconds + remaining <= budgetSeconds + 1e-9
-
-    def putRoute(
-        target: mutable.LongMap[mutable.ArrayBuffer[HumanQualityRoute]],
-        route: HumanQualityRoute
-    ): Unit =
-      if canFinish(route) then
-        val key = packedStateKey(route.mask, route.last)
-        val frontier =
-          target.getOrElseUpdate(
-            key,
-            mutable.ArrayBuffer.empty[HumanQualityRoute]
-          )
-        var i = 0
-        var rejected = false
-        while i < frontier.size && !rejected do
-          val existing = frontier(i)
-          if migrationReferenceDominates(existing, route) then
-            val exactSame =
-              migrationReferenceDominates(route, existing)
-            if !exactSame ||
-                migrationReferencePreferenceBetterOrEqual(existing, route)
-            then
-              rejected = true
-          i += 1
-        if !rejected then
-          i = frontier.size - 1
-          while i >= 0 do
-            if migrationReferenceDominates(route, frontier(i)) then
-              frontier.remove(i)
-            i -= 1
-          frontier += route
-
-    var current =
-      mutable.LongMap.empty[mutable.ArrayBuffer[HumanQualityRoute]]
-
-    trails.indices.foreach { i =>
-      if trailPositionAllowed(i, 1) then
-        startVariants(i).foreach { connector =>
-          putRoute(
-            current,
-            HumanQualityRoute(
-              mask = trailBit(i),
-              last = i,
-              transferSeconds = connector.physicsSeconds,
-              order = Vector(i),
-              connectors = Vector(connector),
-              warmup2Penalty = 0,
-              demandingAdjacencyCount = 0,
-              climbShape = emptyClimbShape,
-              roadStressSeconds = connectorRoadStress(connector),
-              candidateComfortSufferingSeconds =
-                connector.candidateComfortPenaltySeconds,
-              candidateLongestLowSeconds = connectorCandidateLongestLow(connector),
-              candidateLongestHighSeconds = connectorCandidateLongestHigh(connector),
-              candidateSpikeLoadSeconds = connector.candidateComfortSpikeLoadSeconds
-            )
-          )
-        }
-    }
-
-    var layer = 1
-    while layer < trailCount && current.nonEmpty do
-      val nextLayer =
-        mutable.LongMap.empty[mutable.ArrayBuffer[HumanQualityRoute]]
-      current.foreach { case (_, frontier) =>
-        frontier.foreach { base =>
-          var next = 0
-          while next < trails.size do
-            if (base.mask & trailBit(next)) == 0 &&
-                trailTransitionAllowed(base.last, next, layer + 1)
-            then
-              betweenVariants(base.last, next).foreach { connector =>
-                val nextWarmupPenalty =
-                  base.warmup2Penalty +
-                    (if layer == 1 && isSteepTwistyTrail(next) then 1 else 0)
-                val nextAdjacency =
-                  base.demandingAdjacencyCount +
-                    (
-                      if isSteepTwistyTrail(base.last) &&
-                          isSteepTwistyTrail(next)
-                      then 1
-                      else 0
-                    )
-                putRoute(
-                  nextLayer,
-                  HumanQualityRoute(
-                    mask = base.mask | trailBit(next),
-                    last = next,
-                    transferSeconds = base.transferSeconds + connector.physicsSeconds,
-                    order = base.order :+ next,
-                    connectors = base.connectors :+ connector,
-                    warmup2Penalty = nextWarmupPenalty,
-                    demandingAdjacencyCount = nextAdjacency,
-                    climbShape =
-                      appendConnectorAscent(
-                        base.climbShape,
-                        connector,
-                        zeroBasedTransferIndex = layer
-                      ),
-                    roadStressSeconds =
-                      base.roadStressSeconds + connectorRoadStress(connector),
-                    candidateComfortSufferingSeconds =
-                      base.candidateComfortSufferingSeconds +
-                        connector.candidateComfortPenaltySeconds,
-                    candidateLongestLowSeconds =
-                      math.max(
-                        base.candidateLongestLowSeconds,
-                        connectorCandidateLongestLow(connector)
-                      ),
-                    candidateLongestHighSeconds =
-                      math.max(
-                        base.candidateLongestHighSeconds,
-                        connectorCandidateLongestHigh(connector)
-                      ),
-                    candidateSpikeLoadSeconds =
-                      base.candidateSpikeLoadSeconds +
-                        connector.candidateComfortSpikeLoadSeconds
-                  )
-                )
-              }
-            next += 1
         }
       }
-      current = nextLayer
-      layer += 1
-
-    var best = Option.empty[HumanQualityRoute]
-
-    current.foreach { case (_, frontier) =>
-      frontier.foreach { base =>
-        if base.mask == fullMask then
-          finishVariants(base.last).foreach { connector =>
-            val totalSeconds = base.transferSeconds + connector.physicsSeconds
-            if totalSeconds <= budgetSeconds + 1e-9 then
-              val candidate =
-                base.copy(
-                  transferSeconds = totalSeconds,
-                  connectors = base.connectors :+ connector,
-                  climbShape =
-                    appendConnectorAscent(
-                      base.climbShape,
-                      connector,
-                      zeroBasedTransferIndex = trailCount
-                    ),
-                  roadStressSeconds =
-                    base.roadStressSeconds + connectorRoadStress(connector),
-                  candidateComfortSufferingSeconds =
-                    base.candidateComfortSufferingSeconds +
-                      connector.candidateComfortPenaltySeconds,
-                  candidateLongestLowSeconds =
-                    math.max(
-                      base.candidateLongestLowSeconds,
-                      connectorCandidateLongestLow(connector)
-                    ),
-                  candidateLongestHighSeconds =
-                    math.max(
-                      base.candidateLongestHighSeconds,
-                      connectorCandidateLongestHigh(connector)
-                    ),
-                  candidateSpikeLoadSeconds =
-                    base.candidateSpikeLoadSeconds +
-                      connector.candidateComfortSpikeLoadSeconds
-                )
-              best match
-                case Some(existing)
-                    if migrationReferencePreferenceBetterOrEqual(existing, candidate) =>
-                  ()
-                case _ =>
-                  best = Some(candidate)
-          }
+      bits+=1
+    val full=(1<<n)-1; val terminals=mutable.ArrayBuffer.empty[RawTerminal]
+    states.toVector.filter(_._1._1==full).foreach { case((_,last),labels) => labels.foreach { l =>
+      graph.getOrElse((trails(last).name,mode.finishKey),Vector.empty).foreach { c =>
+        val wall=math.max(l.wall,c.effectiveWall); val transfer=l.transfer+connectorTransferSeconds(c); val road=l.road+c.roadStressSeconds; val con=l.connectors:+c
+        terminals+=RawTerminal(mode,wall,transfer,road,l.order,con,l.signature(trails,Some(mode))+"|"+c.id)
       }
-    }
+    }}
+    paretoRawTerminals(terminals.toVector)
 
-    val selected =
-      best.getOrElse(
-        sys.error(
-          f"No exact human-quality route fits wall<=${maxSeverity}%.6f, ${endpointMode.text}, " +
-            s"slack=${Format.duration(qualitySlackSeconds)}, budget=${Format.duration(budgetSeconds)}."
-        )
-      )
-
-    selected
-
-
-  // ---------------------------------------------------------------------
-  // EXACT V5 COMFORT PROMOTION
-  //
-  // Production uses one exact candidate-hard view. The previous broad research
-  // views and percentage/knee reports are removed. For the selected class and
-  // endpoint, labels are constrained by the migration reference guardrails and
-  // searched inside PromotionSearchSlackCeilingSeconds. No beam, top-K,
-  // quantization or random pruning is used.
-  // ---------------------------------------------------------------------
-
-  def compareComfortOrder(a: HumanQualityRoute, b: HumanQualityRoute): Int =
-    a.order
-      .map(_ + 1)
-      .mkString(",")
-      .compareTo(
-        b.order
-          .map(_ + 1)
-          .mkString(",")
-      )
-
-  def compareComfortCandidateHard(a: HumanQualityRoute, b: HumanQualityRoute): Int =
-    def ci(x: Int, y: Int) = java.lang.Integer.compare(x, y)
-    def cd(x: Double, y: Double) = java.lang.Double.compare(x, y)
-    var c = ci(a.warmup2Penalty, b.warmup2Penalty)
-    if c == 0 then c = ci(a.demandingAdjacencyCount, b.demandingAdjacencyCount)
-    if c == 0 then c = cd(a.candidateComfortSufferingSeconds, b.candidateComfortSufferingSeconds)
-    if c == 0 then c = cd(a.roadStressSeconds, b.roadStressSeconds)
-    if c == 0 then c = cd(a.climbShape.maxAscentM, b.climbShape.maxAscentM)
-    if c == 0 then c = cd(a.climbShape.upwardViolationM, b.climbShape.upwardViolationM)
-    if c == 0 then c = cd(a.climbShape.roughnessM, b.climbShape.roughnessM)
-    if c == 0 then c = cd(a.transferSeconds, b.transferSeconds)
-    if c == 0 then c = compareComfortOrder(a, b)
-    c
-
-  def comfortGuardResourcesNoWorse(
-      a: HumanQualityRoute,
-      b: HumanQualityRoute
-  ): Boolean =
-    a.warmup2Penalty <= b.warmup2Penalty &&
-      a.demandingAdjacencyCount <= b.demandingAdjacencyCount &&
-      a.roadStressSeconds <= b.roadStressSeconds + 1e-9 &&
-      a.climbShape.maxAscentM <= b.climbShape.maxAscentM + 1e-9 &&
-      a.climbShape.upwardViolationM <= b.climbShape.upwardViolationM + 1e-9 &&
-      a.climbShape.roughnessM <= b.climbShape.roughnessM + 1e-9 &&
-      a.candidateComfortSufferingSeconds <=
-        b.candidateComfortSufferingSeconds + 1e-9 &&
-      a.candidateLongestLowSeconds <=
-        b.candidateLongestLowSeconds + 1e-9 &&
-      a.candidateLongestHighSeconds <=
-        b.candidateLongestHighSeconds + 1e-9 &&
-      a.candidateSpikeLoadSeconds <=
-        b.candidateSpikeLoadSeconds + 1e-9
-
-
-  def promotedComfortStateDominates(
-      a: HumanQualityRoute,
-      b: HumanQualityRoute
-  ): Boolean =
-    sameHumanQualityMemory(a, b) &&
-      compareComfortCandidateHard(a, b) <= 0 &&
-      a.transferSeconds <= b.transferSeconds + 1e-9 &&
-      comfortGuardResourcesNoWorse(a, b)
-
-  def promotedComfortFinalDominates(
-      a: HumanQualityRoute,
-      b: HumanQualityRoute
-  ): Boolean =
-    compareComfortCandidateHard(a, b) <= 0 &&
-      a.transferSeconds <= b.transferSeconds + 1e-9
-
-  def humanQualityRouteFromConnectorSequence(
-      order: Vector[Int],
-      connectors: Vector[Connector]
-  ): HumanQualityRoute =
-    require(
-      order.nonEmpty,
-      "Human-quality connector sequence requires at least one mandatory trail."
-    )
-    require(
-      connectors.size == order.size + 1,
-      s"Expected ${order.size + 1} connectors for ${order.size} mandatory trails, got ${connectors.size}."
-    )
-    val shape =
-      connectors.zipWithIndex.foldLeft(emptyClimbShape) {
-        case (acc, (connector, transferIndex)) =>
-          appendConnectorAscent(acc, connector, transferIndex)
+  def paretoRawTerminals(v:Vector[RawTerminal]):Vector[RawTerminal] =
+    v.filterNot { b =>
+      v.exists { a =>
+        a.signature!=b.signature &&
+          a.wall<=b.wall &&
+          a.transfer<=b.transfer &&
+          (a.wall<b.wall || a.transfer<b.transfer)
       }
-    HumanQualityRoute(
-      mask = fullMask,
-      last = order.last,
-      transferSeconds = connectors.map(_.physicsSeconds).sum,
-      order = order,
-      connectors = connectors,
-      warmup2Penalty =
-        if warmupPrefixCount(order) >= 2 then 0 else 1,
-      demandingAdjacencyCount = demandingAdjacencyCount(order),
-      climbShape = shape,
-      roadStressSeconds = connectors.map(connectorRoadStress).sum,
-      candidateComfortSufferingSeconds =
-        connectors.map(_.candidateComfortPenaltySeconds).sum,
-      candidateLongestLowSeconds =
-        connectors.map(connectorCandidateLongestLow).maxOption.getOrElse(0.0),
-      candidateLongestHighSeconds =
-        connectors.map(connectorCandidateLongestHigh).maxOption.getOrElse(0.0),
-      candidateSpikeLoadSeconds =
-        connectors.map(_.candidateComfortSpikeLoadSeconds).sum
-    )
+    }.groupBy(x=>(x.wall,x.transfer))
+      .values
+      .map(_.minBy(_.signature))
+      .toVector
+      .sortBy(x=>(x.wall,x.transfer,x.signature))
 
-  def exactPromotedComfortFrontierAtSeverity(
-      progressLabel: String,
-      maxSeverity: Double,
-      endpointMode: RiderEndpointMode,
-      rawFastest: TerrainFrontierRoute,
-      maxSlackSeconds: Double,
-      guardBaseline: HumanQualityRoute
-  ): Vector[HumanQualityRoute] =
-    require(
-      maxSlackSeconds >= 0.0 && Format.finite(maxSlackSeconds),
-      s"Comfort-study slack must be finite and non-negative, got $maxSlackSeconds"
-    )
-
-    val startedNs = System.nanoTime()
-    val budgetSeconds = rawFastest.transferSeconds + maxSlackSeconds
-    val completionFloor = severityCompletionFloor(maxSeverity, endpointMode)
-
-    def withinGuardrails(route: HumanQualityRoute): Boolean =
-      route.warmup2Penalty <= guardBaseline.warmup2Penalty &&
-        route.demandingAdjacencyCount <= guardBaseline.demandingAdjacencyCount &&
-        route.roadStressSeconds <= guardBaseline.roadStressSeconds + 1e-9 &&
-        route.climbShape.maxAscentM <= guardBaseline.climbShape.maxAscentM + 1e-9 &&
-        route.climbShape.upwardViolationM <= guardBaseline.climbShape.upwardViolationM + 1e-9 &&
-        route.climbShape.roughnessM <= guardBaseline.climbShape.roughnessM + 1e-9 &&
-        route.candidateComfortSufferingSeconds <=
-          guardBaseline.candidateComfortSufferingSeconds + 1e-9 &&
-        route.candidateLongestLowSeconds <=
-          guardBaseline.candidateLongestLowSeconds + 1e-9 &&
-        route.candidateLongestHighSeconds <=
-          guardBaseline.candidateLongestHighSeconds + 1e-9 &&
-        route.candidateSpikeLoadSeconds <=
-          guardBaseline.candidateSpikeLoadSeconds + 1e-9
-
-    def guardAllows(route: HumanQualityRoute): Boolean =
-      withinGuardrails(route)
-
-    def startVariants(trailIndex: Int): Vector[Connector] =
-      correctedStartVariantCache(trailIndex)
-        .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-        .filter(connector => endpointNumber(connector.route.from) == endpointMode.startEndpoint)
-
-    def betweenVariants(fromTrail: Int, toTrail: Int): Vector[Connector] =
-      correctedBetweenVariantCache(fromTrail)(toTrail)
-        .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-
-    def finishVariants(trailIndex: Int): Vector[Connector] =
-      correctedFinishVariantCache(trailIndex)
-        .filter(connector => correctedAllowedAtWallSeverity(connector, maxSeverity))
-        .filter(connector => endpointNumber(connector.route.to) == endpointMode.finishEndpoint)
-
-    def canFinish(route: HumanQualityRoute): Boolean =
-      val remaining =
-        severityCompletionLowerBound(
-          completionFloor,
-          route.mask,
-          route.last
-        )
-      Format.finite(remaining) &&
-        route.transferSeconds + remaining <= budgetSeconds + 1e-9
-
-    def labelCount(
-        states: mutable.LongMap[mutable.ArrayBuffer[HumanQualityRoute]]
-    ): Int =
-      states.valuesIterator.map(_.size).sum
-
-    def printLayer(
-        layer: Int,
-        states: mutable.LongMap[mutable.ArrayBuffer[HumanQualityRoute]]
-    ): Unit =
-      println(
-        f"[4/4 comfort $progressLabel%-18s RIDER-QUALITY  layer=$layer%2d/$trailCount%2d " +
-          f"states=${states.size}%5d labels=${labelCount(states)}%7d " +
-          f"elapsed=${timingSeconds(startedNs, System.nanoTime())}%.2f s"
-      )
-
-    def putRoute(
-        target: mutable.LongMap[mutable.ArrayBuffer[HumanQualityRoute]],
-        route: HumanQualityRoute
-    ): Unit =
-      if canFinish(route) && guardAllows(route) then
-        val key = packedStateKey(route.mask, route.last)
-        val frontier =
-          target.getOrElseUpdate(
-            key,
-            mutable.ArrayBuffer.empty[HumanQualityRoute]
-          )
-
-        var rejected = false
-        var i = 0
-        while i < frontier.size && !rejected do
-          if promotedComfortStateDominates(frontier(i), route) then
-            rejected = true
-          i += 1
-
-        if !rejected then
-          i = frontier.size - 1
-          while i >= 0 do
-            if promotedComfortStateDominates(route, frontier(i)) then
-              frontier.remove(i)
-            i -= 1
-          frontier += route
-
-    println(
-      f"[4/4 comfort $progressLabel%-18s RIDER-QUALITY  START wall<=${maxSeverity}%.6f " +
-        f"raw=${Format.duration(rawFastest.transferSeconds)}%s maxSlack=${Format.duration(maxSlackSeconds)}%s"
-    )
-
-    var current =
-      mutable.LongMap.empty[mutable.ArrayBuffer[HumanQualityRoute]]
-
-    trails.indices.foreach { i =>
-      if trailPositionAllowed(i, 1) then
-        startVariants(i).foreach { connector =>
-          putRoute(
-            current,
-            HumanQualityRoute(
-              mask = trailBit(i),
-              last = i,
-              transferSeconds = connector.physicsSeconds,
-              order = Vector(i),
-              connectors = Vector(connector),
-              warmup2Penalty = 0,
-              demandingAdjacencyCount = 0,
-              climbShape = emptyClimbShape,
-              roadStressSeconds = connectorRoadStress(connector),
-              candidateComfortSufferingSeconds =
-                connector.candidateComfortPenaltySeconds,
-              candidateLongestLowSeconds =
-                connectorCandidateLongestLow(connector),
-              candidateLongestHighSeconds =
-                connectorCandidateLongestHigh(connector),
-              candidateSpikeLoadSeconds =
-                connector.candidateComfortSpikeLoadSeconds
-            )
-          )
-        }
+  def breakpoints(front:Vector[RawTerminal]):Vector[Breakpoint] =
+    val walls=front.map(_.wall).filter(_ < 1.0-1e-9).distinct.sorted
+    val out=mutable.ArrayBuffer.empty[Breakpoint]
+    var previousUseful=Option.empty[RawTerminal]
+    walls.foreach { w =>
+      val eligible=front.filter(x=>x.wall<=w+1e-12)
+      if eligible.nonEmpty then
+        val current=eligible.minBy(x=>(x.transfer,x.signature))
+        val useful=previousUseful match
+          case None => true
+          case Some(previous) =>
+            val gain=previous.transfer-current.transfer
+            val orderChanged=previous.order!=current.order
+            gain>=180.0-1e-9 || orderChanged
+        if useful then
+          out += Breakpoint(current.mode,w,current.transfer,current.road,current.signature)
+          previousUseful=Some(current)
     }
-    printLayer(1, current)
+    out.toVector
 
-    var layer = 1
-    while layer < trailCount && current.nonEmpty do
-      val nextLayer =
-        mutable.LongMap.empty[mutable.ArrayBuffer[HumanQualityRoute]]
+  def rawTerminalDiagnostic(t:RawTerminal,trails:Vector[Trail]):String =
+    val order=t.order.map(i=>trails(i).name).mkString("->")
+    f"raw-frontier ${t.mode} wall=${t.wall}%.9f transfer=${t.transfer}%.3f road=${t.road}%.3f order=$order"
 
-      current.foreach { case (_, frontier) =>
-        frontier.foreach { base =>
-          var next = 0
-          while next < trails.size do
-            if (base.mask & trailBit(next)) == 0 &&
-                trailTransitionAllowed(base.last, next, layer + 1)
-            then
-              betweenVariants(base.last, next).foreach { connector =>
-                val nextWarmupPenalty =
-                  base.warmup2Penalty +
-                    (if layer == 1 && isSteepTwistyTrail(next) then 1 else 0)
-                val nextAdjacency =
-                  base.demandingAdjacencyCount +
-                    (
-                      if isSteepTwistyTrail(base.last) &&
-                          isSteepTwistyTrail(next)
-                      then 1
-                      else 0
-                    )
+  def fastestRaw(front:Vector[RawTerminal],ceiling:Double):Option[RawTerminal] =
+    val eligible = front.filter(_.wall <= ceiling)
+    if eligible.isEmpty then None
+    else Some(eligible.minBy(x => (x.transfer,x.signature)))
 
-                putRoute(
-                  nextLayer,
-                  HumanQualityRoute(
-                    mask = base.mask | trailBit(next),
-                    last = next,
-                    transferSeconds = base.transferSeconds + connector.physicsSeconds,
-                    order = base.order :+ next,
-                    connectors = base.connectors :+ connector,
-                    warmup2Penalty = nextWarmupPenalty,
-                    demandingAdjacencyCount = nextAdjacency,
-                    climbShape =
-                      appendConnectorAscent(
-                        base.climbShape,
-                        connector,
-                        zeroBasedTransferIndex = layer
-                      ),
-                    roadStressSeconds =
-                      base.roadStressSeconds + connectorRoadStress(connector),
-                    candidateComfortSufferingSeconds =
-                      base.candidateComfortSufferingSeconds +
-                        connector.candidateComfortPenaltySeconds,
-                    candidateLongestLowSeconds =
-                      math.max(
-                        base.candidateLongestLowSeconds,
-                        connectorCandidateLongestLow(connector)
-                      ),
-                    candidateLongestHighSeconds =
-                      math.max(
-                        base.candidateLongestHighSeconds,
-                        connectorCandidateLongestHigh(connector)
-                      ),
-                    candidateSpikeLoadSeconds =
-                      base.candidateSpikeLoadSeconds +
-                        connector.candidateComfortSpikeLoadSeconds
-                  )
-                )
-              }
-            next += 1
-        }
+  case class Assignment(classes:Vector[Double],modes:Vector[Mode],routes:Vector[RawTerminal]):
+    def totalTransfer=routes.map(_.transfer).sum
+    def totalRoad=routes.map(_.road).sum
+    def p2pIndex=modes.indexOf(Mode.P2P)
+
+  def chooseAssignment(classes:Vector[Double],loopFront:Vector[RawTerminal],p2pFront:Vector[RawTerminal]):Option[(Vector[Assignment],Assignment)] =
+    val all=(0 until 3).flatMap { p2pIdx =>
+      val modes=(0 until 3).map(i=>if i==p2pIdx then Mode.P2P else Mode.LOOP).toVector
+      val routeOptions=classes.zip(modes).map { case(c,m) =>
+        fastestRaw(if m==Mode.LOOP then loopFront else p2pFront,c)
       }
-
-      current = nextLayer
-      layer += 1
-      printLayer(layer, current)
-
-    val finals = mutable.ArrayBuffer.empty[HumanQualityRoute]
-
-    def putFinal(candidate: HumanQualityRoute): Unit =
-      var rejected = false
-      var i = 0
-      while i < finals.size && !rejected do
-        if promotedComfortFinalDominates(finals(i), candidate) then
-          rejected = true
-        i += 1
-
-      if !rejected then
-        i = finals.size - 1
-        while i >= 0 do
-          if promotedComfortFinalDominates(candidate, finals(i)) then
-            finals.remove(i)
-          i -= 1
-        finals += candidate
-
-    current.foreach { case (_, frontier) =>
-      frontier.foreach { base =>
-        if base.mask == fullMask then
-          finishVariants(base.last).foreach { connector =>
-            val totalSeconds = base.transferSeconds + connector.physicsSeconds
-            if totalSeconds <= budgetSeconds + 1e-9 then
-              val candidate =
-                base.copy(
-                  transferSeconds = totalSeconds,
-                  connectors = base.connectors :+ connector,
-                  climbShape =
-                    appendConnectorAscent(
-                      base.climbShape,
-                      connector,
-                      zeroBasedTransferIndex = trailCount
-                    ),
-                  roadStressSeconds =
-                    base.roadStressSeconds + connectorRoadStress(connector),
-                  candidateComfortSufferingSeconds =
-                    base.candidateComfortSufferingSeconds +
-                      connector.candidateComfortPenaltySeconds,
-                  candidateLongestLowSeconds =
-                    math.max(
-                      base.candidateLongestLowSeconds,
-                      connectorCandidateLongestLow(connector)
-                    ),
-                  candidateLongestHighSeconds =
-                    math.max(
-                      base.candidateLongestHighSeconds,
-                      connectorCandidateLongestHigh(connector)
-                    ),
-                  candidateSpikeLoadSeconds =
-                    base.candidateSpikeLoadSeconds +
-                      connector.candidateComfortSpikeLoadSeconds
-                )
-              if guardAllows(candidate) then
-                putFinal(candidate)
-          }
-      }
-    }
-
-    if finals.isEmpty then
-      println(
-        f"[4/4 comfort $progressLabel%-18s RIDER-QUALITY DONE finals=0 " +
-          f"(no route satisfies migration guardrails) " +
-          f"elapsed=${timingSeconds(startedNs, System.nanoTime())}%.2f s"
-      )
-    else
-      println(
-        f"[4/4 comfort $progressLabel%-18s RIDER-QUALITY DONE finals=${finals.size}%d " +
-          f"elapsed=${timingSeconds(startedNs, System.nanoTime())}%.2f s"
-      )
-
-    finals.toVector
-
-  case class EndpointRoleSeries(
-      label: String,
-      endpointMode: RiderEndpointMode
-  )
-
-  def rawUsefulTerrainLevels(
-      series: TerrainFrontierSeries
-  ): Vector[(Double, TerrainFrontierRoute)] =
-    val out = Vector.newBuilder[(Double, TerrainFrontierRoute)]
-    var previousUseful = Option.empty[TerrainFrontierRoute]
-    rawChangedFrontierRows(series).foreach { case (severity, current) =>
-      val gain =
-        previousUseful.map(_.transferSeconds - current.transferSeconds)
-      val changed =
-        previousUseful.exists(_.order != current.order)
-      val useful =
-        previousUseful.isEmpty ||
-          gain.exists(_ >= 180.0 - 1e-9) ||
-          changed
-      if useful then
-        out += ((severity, current))
-        previousUseful = Some(current)
-    }
-    out.result()
-
-  val endpointRawUsefulLevels =
-    exactWallBreakpointSeries.map { series =>
-      (
-        EndpointRoleSeries(series.label, series.endpointMode),
-        rawUsefulTerrainLevels(series)
-      )
-    }
-
-  val globalRawUsefulSeverities =
-    endpointRawUsefulLevels
-      .flatMap(_._2.map(_._1))
-      .distinct
-      .sorted
-
-  require(
-    globalRawUsefulSeverities.size >= 3,
-    s"RAW endpoint-neutral product selector needs at least three distinct useful wall severities; " +
-      s"found ${globalRawUsefulSeverities.mkString(",")}."
-  )
-
-  val productClassSeverities =
-    Vector(
-      globalRawUsefulSeverities.head,
-      globalRawUsefulSeverities.drop(1).dropRight(1).last,
-      globalRawUsefulSeverities.last
-    )
-
-  require(
-    productClassSeverities.sliding(2).forall {
-      case Vector(a, b) => b > a + 1e-9
-      case _            => true
-    },
-    s"Product wall severities are not strictly increasing: ${productClassSeverities.mkString(",")}"
-  )
-
-  val loopEndpointRole =
-    endpointRawUsefulLevels
-      .map(_._1)
-      .find(_.label.startsWith("LOOP"))
-      .getOrElse(
-        sys.error("Product selector requires LOOP terrain frontier.")
-      )
-
-  val p2pEndpointRole =
-    endpointRawUsefulLevels
-      .map(_._1)
-      .find(_.label.startsWith("P2P"))
-      .getOrElse(
-        sys.error("Product selector requires P2P terrain frontier.")
-      )
-
-  def rawTerrainRouteAtSeverity(
-      endpointMode: RiderEndpointMode,
-      severity: Double
-  ): Option[TerrainFrontierRoute] =
-    exactWallBreakpointSeries
-      .find(_.endpointMode == endpointMode)
-      .flatMap(
-        _.rows.collectFirst {
-          case (candidateSeverity, route)
-              if math.abs(candidateSeverity - severity) <= 1e-9 =>
-            route
-        }.flatten
-      )
-
-  case class ProductSetAssignment(
-      endpointSeries: Vector[EndpointRoleSeries],
-      severities: Vector[Double],
-      rawRoutes: Vector[TerrainFrontierRoute]
-  ):
-    def p2pClassOneBased: Int =
-      endpointSeries.indexWhere(_.label.startsWith("P2P")) + 1
-
-    def totalTransferSeconds: Double =
-      rawRoutes.map(_.transferSeconds).sum
-
-    def totalRoadStressSeconds: Double =
-      rawRoutes.flatMap(_.connectors).map(connectorRoadStress).sum
-
-  val feasibleProductAssignments =
-    productClassSeverities.indices.flatMap { p2pIndex =>
-      val endpointSeries =
-        productClassSeverities.indices.map { classIndex =>
-          if classIndex == p2pIndex then p2pEndpointRole else loopEndpointRole
-        }.toVector
-
-      val rawRoutes =
-        endpointSeries.zip(productClassSeverities).map {
-          case (endpointSeries, severity) =>
-            rawTerrainRouteAtSeverity(endpointSeries.endpointMode, severity)
-        }
-
-      if rawRoutes.forall(_.nonEmpty) then
-        Some(
-          ProductSetAssignment(
-            endpointSeries = endpointSeries,
-            severities = productClassSeverities,
-            rawRoutes = rawRoutes.flatten
-          )
-        )
+      if routeOptions.forall(_.nonEmpty) then
+        Some(Assignment(classes,modes,routeOptions.flatten))
       else None
     }.toVector
+    if all.size != 3 then None
+    else Some((all,all.minBy(a=>(a.totalTransfer,a.totalRoad,a.p2pIndex))))
 
-  require(
-    feasibleProductAssignments.nonEmpty,
-    "No reachable endpoint-role assignment gives exactly two LOOP classes and one P2P class."
-  )
-
-  val selectedProductAssignment =
-    feasibleProductAssignments.minBy { assignment =>
-      (
-        assignment.totalTransferSeconds,
-        assignment.totalRoadStressSeconds,
-        assignment.p2pClassOneBased
-      )
+  def hasCompleteOrder(mode:Mode,trails:Vector[Trail],graph:Map[(String,String),Vector[Connector]]):Boolean =
+    val n=trails.size
+    val reachable=mutable.Set.empty[(Int,Int)]
+    trails.indices.foreach { i =>
+      if !trails(i).demanding.demanding && graph.getOrElse(("START",trails(i).name),Vector.empty).nonEmpty then
+        reachable += ((1 << i,i))
+    }
+    var bits=1
+    while bits<n do
+      val current=reachable.toVector.filter(x=>Integer.bitCount(x._1)==bits)
+      current.foreach { case(mask,last) =>
+        trails.indices.foreach { nxt =>
+          if (mask & (1 << nxt)) == 0 && graph.getOrElse((trails(last).name,trails(nxt).name),Vector.empty).nonEmpty then
+            reachable += ((mask | (1 << nxt),nxt))
+        }
+      }
+      bits += 1
+    val full=(1 << n)-1
+    reachable.exists { case(mask,last) =>
+      mask==full && graph.getOrElse((trails(last).name,mode.finishKey),Vector.empty).nonEmpty
     }
 
-  val timingTerrainProductClassesDoneNs = System.nanoTime()
-  println(
-    "[3/4  50.0%] RAW terrain classes + endpoint-neutral assignment ready; " +
-      "computing rider-quality routes."
+  def graphDiagnostic(trails:Vector[Trail],graph:Map[(String,String),Vector[Connector]],diag:Diagnostics):String =
+    val nonEmpty=graph.count(_._2.nonEmpty)
+    val expectedTransitions=trails.size + trails.size*math.max(0,trails.size-1) + 2*trails.size
+    val empty=math.max(0,expectedTransitions-nonEmpty)
+    val startMissing=trails.filter(t=>graph.getOrElse(("START",t.name),Vector.empty).isEmpty).map(_.name)
+    val loopFinishMissing=trails.filter(t=>graph.getOrElse((t.name,"FINISH_LOOP"),Vector.empty).isEmpty).map(_.name)
+    val p2pFinishMissing=trails.filter(t=>graph.getOrElse((t.name,"FINISH_P2P"),Vector.empty).isEmpty).map(_.name)
+    val deadInbound=trails.filter { t =>
+      val fromStart=graph.getOrElse(("START",t.name),Vector.empty).nonEmpty
+      val fromMandatory=trails.exists(o => o.name!=t.name && graph.getOrElse((o.name,t.name),Vector.empty).nonEmpty)
+      !fromStart && !fromMandatory
+    }.map(_.name)
+    val deadOutbound=trails.filter { t =>
+      val toMandatory=trails.exists(o => o.name!=t.name && graph.getOrElse((t.name,o.name),Vector.empty).nonEmpty)
+      val toFinish=graph.getOrElse((t.name,"FINISH_LOOP"),Vector.empty).nonEmpty || graph.getOrElse((t.name,"FINISH_P2P"),Vector.empty).nonEmpty
+      !toMandatory && !toFinish
+    }.map(_.name)
+    val rejectText=diag.hardRejects.toVector.sortBy(-_._2).map{case(k,v)=>s"$k=$v"}.mkString(", ")
+    s"graph transitions nonEmpty=$nonEmpty empty=$empty acceptedVariants=${diag.acceptedVariants} retained=${diag.retained} safetyReroutes=${diag.safetyReroutes}; startMissing=${startMissing.mkString("[",",","]")}; loopFinishMissing=${loopFinishMissing.mkString("[",",","]")}; p2pFinishMissing=${p2pFinishMissing.mkString("[",",","]")}; deadInbound=${deadInbound.mkString("[",",","]")}; deadOutbound=${deadOutbound.mkString("[",",","]")}; rejects={$rejectText}"
+
+  def graphNodeDiagnostics(trails:Vector[Trail],graph:Map[(String,String),Vector[Connector]]):Vector[String] =
+    trails.map { t =>
+      val inbound=trails.filterNot(_.name==t.name).count(o => graph.getOrElse((o.name,t.name),Vector.empty).nonEmpty)
+      val outbound=trails.filterNot(_.name==t.name).count(o => graph.getOrElse((t.name,o.name),Vector.empty).nonEmpty)
+      val start=graph.getOrElse(("START",t.name),Vector.empty).size
+      val loop=graph.getOrElse((t.name,"FINISH_LOOP"),Vector.empty).size
+      val p2p=graph.getOrElse((t.name,"FINISH_P2P"),Vector.empty).size
+      s"graph-node ${t.name} startVariants=$start inboundTransitions=$inbound outboundTransitions=$outbound loopFinishVariants=$loop p2pFinishVariants=$p2p"
+    }
+
+  def warmupAfter(order:Vector[Int],trails:Vector[Trail]):Int =
+    val first=order.indexWhere(i=>trails(i).demanding.demanding)
+    if first<0 then 0 else if first>=2 then 0 else if first==1 then 1 else Int.MaxValue
+
+  def adjacency(order:Vector[Int],trails:Vector[Trail]):Int = order.sliding(2).count{case Vector(a,b)=>trails(a).demanding.demanding&&trails(b).demanding.demanding;case _=>false}
+
+  type RiderStateKey = (Int,Int,Long,Long,Int,Boolean)
+
+  def riderLabelGroupKey(l:RiderLabel,previousCeiling:Option[Double]):RiderStateKey =
+    val pa=l.climb.prevAscent.map(java.lang.Double.doubleToLongBits).getOrElse(Long.MinValue)
+    val pd=l.climb.prevDelta.map(java.lang.Double.doubleToLongBits).getOrElse(Long.MinValue)
+    val genuine=previousCeiling.exists(pc=>l.requiredWall>pc)
+    (l.mask,l.last,pa,pd,l.climb.count,genuine)
+
+  def riderNoWorse(a:RiderLabel,b:RiderLabel):Boolean =
+    val ar=a.rider; val br=b.rider
+    a.transfer<=b.transfer&&ar.t120<=br.t120&&ar.t140<=br.t140&&ar.t160<=br.t160&&ar.candHard<=br.candHard&&streakNoWorse(ar.streak120,br.streak120)&&streakNoWorse(ar.streak140,br.streak140)&&ar.spike<=br.spike&&a.road<=b.road&&a.climb.maxAscent<=b.climb.maxAscent&&a.climb.upward<=b.climb.upward&&a.climb.roughness<=b.climb.roughness&&a.warmupPenalty<=b.warmupPenalty&&a.demandingAdjacency<=b.demandingAdjacency&&a.requiredWall<=b.requiredWall
+
+  def riderStrict(a:RiderLabel,b:RiderLabel):Boolean =
+    val ar=a.rider; val br=b.rider
+    a.transfer<b.transfer||ar.t120<br.t120||ar.t140<br.t140||ar.t160<br.t160||ar.spike<br.spike||a.road<b.road||a.climb.maxAscent<b.climb.maxAscent||a.climb.upward<b.climb.upward||a.climb.roughness<b.climb.roughness||a.warmupPenalty<b.warmupPenalty||a.demandingAdjacency<b.demandingAdjacency||a.requiredWall<b.requiredWall||streakStrict(ar.streak120,br.streak120)||streakStrict(ar.streak140,br.streak140)
+
+  case class RiderPerf(
+      var insertCalls:Long=0L,
+      var dominanceChecks:Long=0L,
+      var insertNanos:Long=0L
   )
 
-  def selectedTransferSeconds(route: MultiLabelRoute): Double =
-    route.connectors.map(_.physicsSeconds).sum
-
-  def productRouteToMultiLabel(route: HumanQualityRoute): MultiLabelRoute =
-    val climbShape =
-      route.connectors.zipWithIndex.foldLeft(emptyClimbShape) {
-        case (shape, (connector, transferIndex)) =>
-          appendConnectorAscent(shape, connector, transferIndex)
+  /**
+    * `front` contains one exact future-continuation state only.  FIX8 mixed all
+    * prevAscent/prevDelta groups for the same (mask,last) in one ArrayBuffer and
+    * re-scanned unrelated groups on every insertion.  That was exact but could
+    * become quadratic in the number of continuation states.
+    */
+  def insertRiderGroup(
+      front:mutable.ArrayBuffer[RiderLabel],
+      cand:RiderLabel,
+      trails:Vector[Trail],
+      perf:RiderPerf
+  ):Unit =
+    val started=System.nanoTime()
+    perf.insertCalls += 1
+    def noWorse(a:RiderLabel,b:RiderLabel):Boolean =
+      perf.dominanceChecks += 1
+      riderNoWorse(a,b)
+    def strict(a:RiderLabel,b:RiderLabel):Boolean = riderStrict(a,b)
+    if !front.exists(x=>noWorse(x,cand)&&strict(x,cand)) then
+      val kept=front.filterNot(x=>noWorse(cand,x)&&strict(cand,x))
+      val eq=kept.indexWhere { x =>
+        !strict(x, cand) &&
+        !strict(cand, x) &&
+        noWorse(x, cand) &&
+        noWorse(cand, x)
       }
-    val trailRides = route.order.map(technicalTrailTimes)
-    val trailSeconds = trailRides.map(_.totalSeconds).sum
-    val connectorSeconds = route.connectors.map(_.physicsSeconds).sum
-    val connectorMaxPower =
-      route.connectors.map(_.maxRiderPowerW).foldLeft(0.0)(math.max)
-    val trailMaxPower =
-      trailRides.map(_.maxRiderPowerW).foldLeft(0.0)(math.max)
-    MultiLabelRoute(
-      mask = fullMask,
-      order = route.order,
-      connectors = route.connectors,
-      movingSeconds = connectorSeconds + trailSeconds,
-      candidateComfortSufferingSeconds = route.candidateComfortSufferingSeconds,
-      candidateLongestLowSeconds = route.candidateLongestLowSeconds,
-      candidateLongestHighSeconds = route.candidateLongestHighSeconds,
-      candidateSpikeLoadSeconds = route.candidateSpikeLoadSeconds,
-      downhillHandlingSeconds = route.connectors.map(_.downhillHandlingSeconds).sum,
-      roadStressSeconds = route.connectors.map(connectorRoadStress).sum,
-      recoveryBurdenSeconds = route.connectors.map(_.fatiguePenaltySeconds).sum,
-      pathBurdenSeconds = route.connectors.map(_.transferQualityPenaltySeconds).sum,
-      maxConnectorGrade100Pct =
-        route.connectors.map(_.maxGrade100Pct).foldLeft(0.0)(math.max),
-      maxRiderPowerW = math.max(connectorMaxPower, trailMaxPower),
-      maxWallClass =
-        route.connectors.map(finalEffectiveConnectorWallClass).foldLeft(0)(math.max),
-      climbShape = climbShape,
-      trailLateAscentBurden = route.order.map(technicalTrailLateAscentM).sum
+      front.clear(); front++=kept
+      if eq<0 then front+=cand
+      else
+        val existing=front(eq)
+        if cand.signature(trails)<existing.signature(trails) then front(eq)=cand
+    perf.insertNanos += System.nanoTime()-started
+
+  def partialCanStillUpgrade(l:RiderLabel,baseline:RiderTerminal):Boolean =
+    val r=l.rider; val b=baseline.rider
+    // Every future contribution is non-negative / monotone for these resources.
+    // Once a guard is already violated, no continuation can become an eligible
+    // upgrade.  This is admissible pruning, not epsilon/beam/top-K pruning.
+    r.candHard < b.candHard &&
+      r.streak120.localMax <= b.streak120.localMax &&
+      r.streak140.localMax <= b.streak140.localMax &&
+      r.spike <= b.spike &&
+      l.road <= baseline.road &&
+      l.climb.maxAscent <= baseline.climb.maxAscent &&
+      l.climb.upward <= baseline.climb.upward &&
+      l.climb.roughness <= baseline.climb.roughness &&
+      l.warmupPenalty <= baseline.warmupPenalty &&
+      l.demandingAdjacency <= baseline.demandingAdjacency
+
+  def terminalIsEligibleUpgrade(t:RiderTerminal,baseline:RiderTerminal,previousCeiling:Option[Double]):Boolean =
+    val r=t.rider; val b=baseline.rider
+    previousCeiling.forall(pc=>t.requiredWall>pc) &&
+      r.candHard < b.candHard &&
+      r.streak120.localMax <= b.streak120.localMax &&
+      r.streak140.localMax <= b.streak140.localMax &&
+      r.spike <= b.spike &&
+      t.road <= baseline.road &&
+      t.climb.maxAscent <= baseline.climb.maxAscent &&
+      t.climb.upward <= baseline.climb.upward &&
+      t.climb.roughness <= baseline.climb.roughness &&
+      t.warmupPenalty <= baseline.warmupPenalty &&
+      t.demandingAdjacency <= baseline.demandingAdjacency
+
+  // Tie-breaker used only after the primary transfer/candHard tradeoff is fixed.
+  def productSecondaryKey(c:RiderTerminal) =
+    (
+      (
+        c.road,
+        c.rider.streak120.localMax,
+        c.rider.streak140.localMax,
+        c.rider.spike,
+        c.climb.maxAscent,
+        c.climb.upward,
+        c.climb.roughness
+      ),
+      c.signature
     )
 
-  val productC1Severity = selectedProductAssignment.severities(0)
-  val productC2Severity = selectedProductAssignment.severities(1)
-  val productC3Severity = selectedProductAssignment.severities(2)
+  def transferFirstSelectorKey(c:RiderTerminal) =
+    (((c.transfer,c.rider.candHard),productSecondaryKey(c)),c.signature)
 
-  val referenceProductSelected =
-    productClassSeverities.indices.map { classIndex =>
-      val endpointMode =
-        selectedProductAssignment.endpointSeries(classIndex).endpointMode
-      val severity =
-        productClassSeverities(classIndex)
-      val rawFastest =
-        selectedProductAssignment.rawRoutes(classIndex)
-      val legacy =
-        exactMigrationReferenceAtSeverity(
-          severity,
-          endpointMode,
-          rawFastest,
-          MigrationReferenceSlackSeconds
+  def comfortFirstSelectorKey(c:RiderTerminal) =
+    (((c.rider.candHard,c.transfer),productSecondaryKey(c)),c.signature)
+
+  // Exact 2-D frontier accumulator.  Invariant: as transfer increases, candHard
+  // strictly decreases.  Same-transfer/same-candHard ties keep the better guarded
+  // secondary metrics/signature.  This is product selection only and never prunes
+  // riderDp states.
+  def insertTradeoffFrontier(
+      frontier:java.util.TreeMap[java.lang.Double,RiderTerminal],
+      candidate:RiderTerminal
+  ):Unit =
+    val key=java.lang.Double.valueOf(candidate.transfer)
+    val existing=frontier.get(key)
+    if existing!=null then
+      val keepCandidate =
+        candidate.rider.candHard < existing.rider.candHard ||
+          (candidate.rider.candHard == existing.rider.candHard &&
+            Vector(existing,candidate).minBy(productSecondaryKey).signature == candidate.signature)
+      if !keepCandidate then return
+      frontier.put(key,candidate)
+    else
+      val lower=frontier.lowerEntry(key)
+      if lower!=null && lower.getValue.rider.candHard <= candidate.rider.candHard then return
+      frontier.put(key,candidate)
+
+    var higher=frontier.higherEntry(key)
+    while higher!=null && higher.getValue.rider.candHard >= candidate.rider.candHard do
+      frontier.remove(higher.getKey)
+      higher=frontier.higherEntry(key)
+
+  def tradeoffFrontierValues(frontier:java.util.TreeMap[java.lang.Double,RiderTerminal]):Vector[RiderTerminal] =
+    frontier.values().asScala.toVector
+
+  case class KneeSelection(
+      selected:RiderTerminal,
+      transferFirst:RiderTerminal,
+      comfortFirst:RiderTerminal,
+      score:Double,
+      transferFraction:Double,
+      comfortFraction:Double,
+      frontierSize:Int
+  )
+
+  def selectParetoKnee(candidates:Vector[RiderTerminal]):Option[KneeSelection] =
+    if candidates.isEmpty then None
+    else
+      val tree=new java.util.TreeMap[java.lang.Double,RiderTerminal]()
+      candidates.foreach(c=>insertTradeoffFrontier(tree,c))
+      selectParetoKneeFromFrontier(tradeoffFrontierValues(tree))
+
+  def selectParetoKneeFromFrontier(front:Vector[RiderTerminal]):Option[KneeSelection] =
+    if front.isEmpty then None
+    else
+      val tf=front.head
+      val cf=front.last
+      val dt=cf.transfer-tf.transfer
+      val dh=tf.rider.candHard-cf.rider.candHard
+      def fractions(c:RiderTerminal):(Double,Double,Double) =
+        if dt<=1e-12 || dh<=1e-12 then (0.0,0.0,0.0)
+        else
+          val tx=math.max(0.0,math.min(1.0,(c.transfer-tf.transfer)/dt))
+          val cy=math.max(0.0,math.min(1.0,(tf.rider.candHard-c.rider.candHard)/dh))
+          (cy-tx,tx,cy)
+      val selected =
+        if front.size<=2 || dt<=1e-12 || dh<=1e-12 then tf
+        else front.minBy { c =>
+          val (score,_,_)=fractions(c)
+          (-score,c.transfer,c.rider.candHard,productSecondaryKey(c))
+        }
+      val (score,tx,cy)=fractions(selected)
+      Some(KneeSelection(selected,tf,cf,score,tx,cy,front.size))
+
+  def riderDp(
+      mode:Mode,
+      ceiling:Double,
+      previousCeiling:Option[Double],
+      baseline:RiderTerminal,
+      debugLabel:String,
+      trails:Vector[Trail],
+      graph:Map[(String,String),Vector[Connector]]
+  ):Vector[RiderTerminal] =
+    val n=trails.size
+    // Full exact continuation key is the state key.  Dominance never compares
+    // labels whose future climb semantics differ.
+    val states=mutable.Map.empty[RiderStateKey,mutable.ArrayBuffer[RiderLabel]]
+    var generatedLabels=0L
+    var baselinePruned=0L
+    val perf=RiderPerf()
+    val dpStarted=System.nanoTime()
+    appendLiveDebug(
+      f"rider-search-exact $debugLabel baselineTransfer=${baseline.transfer}%.3f noFixedTimeHorizon=true"
+    )
+
+    def insert(l:RiderLabel):Unit =
+      generatedLabels+=1
+      if partialCanStillUpgrade(l,baseline) then
+        val key=riderLabelGroupKey(l,previousCeiling)
+        insertRiderGroup(states.getOrElseUpdate(key,mutable.ArrayBuffer.empty),l,trails,perf)
+      else baselinePruned+=1
+
+    trails.indices.foreach { i =>
+      if !trails(i).demanding.demanding then
+        graph.getOrElse(("START",trails(i).name),Vector.empty).filter(_.effectiveWall<=ceiling).foreach { c =>
+          val rm=c.rider.concat(trails(i).rider)
+          val l=RiderLabel(1<<i,i,connectorTransferSeconds(c),c.roadStressSeconds,c.effectiveWall,rm,ClimbState.Empty.add(c.ascentM,0),0,0,Vector(i),Vector(c))
+          insert(l)
+        }
+    }
+
+    var bits=1
+    while bits<n do
+      val layerStarted=System.nanoTime()
+      val insertBefore=perf.insertNanos
+      val checksBefore=perf.dominanceChecks
+      val generatedBefore=generatedLabels
+      val prunedBefore=baselinePruned
+      val snapshot=states.toVector
+        .filter { case(key,_) => Integer.bitCount(key._1)==bits }
+        .sortBy(_._1)
+      val layerLabels=snapshot.map(_._2.size).sum
+      snapshot.foreach { case(key,labels) =>
+        val mask=key._1
+        val last=key._2
+        trails.indices.filter(i=>(mask&(1<<i))==0).foreach { nxt =>
+          labels.foreach { l =>
+            graph.getOrElse((trails(last).name,trails(nxt).name),Vector.empty).filter(_.effectiveWall<=ceiling).foreach { c =>
+              val newOrder=l.order:+nxt
+              val firstDemandBefore=l.order.exists(i=>trails(i).demanding.demanding)
+              val warm=if firstDemandBefore then l.warmupPenalty else if trails(nxt).demanding.demanding then (if l.order.size>=2 then 0 else 1) else l.warmupPenalty
+              val adj=l.demandingAdjacency+(if trails(last).demanding.demanding&&trails(nxt).demanding.demanding then 1 else 0)
+              val nl=RiderLabel(
+                mask|(1<<nxt),nxt,
+                l.transfer+connectorTransferSeconds(c),
+                l.road+c.roadStressSeconds,
+                math.max(l.requiredWall,c.effectiveWall),
+                l.rider.concat(c.rider).concat(trails(nxt).rider),
+                l.climb.add(c.ascentM,l.connectors.size),
+                warm,adj,newOrder,l.connectors:+c
+              )
+              insert(nl)
+            }
+          }
+        }
+      }
+      bits+=1
+
+    val full=(1<<n)-1
+    val fullGroups=states.toVector
+      .filter { case(key,_) => key._1==full }
+      .sortBy(_._1)
+    val terminalStarted=System.nanoTime()
+    val terminalLabels=fullGroups.map(_._2.size).sum
+    var terminalGroupsDone=0
+    var terminalLabelsDone=0L
+    var terminalCandidatesChecked=0L
+    var eligibleCandidates=0L
+    val tradeoffFrontier=new java.util.TreeMap[java.lang.Double,RiderTerminal]()
+
+    fullGroups.foreach { case(key,labels) =>
+      val last=key._2
+      labels.foreach { l =>
+        terminalLabelsDone += 1
+        graph.getOrElse((trails(last).name,mode.finishKey),Vector.empty).filter(_.effectiveWall<=ceiling).foreach { c =>
+          terminalCandidatesChecked += 1
+          val rm=l.rider.concat(c.rider)
+          val climb=l.climb.add(c.ascentM,l.connectors.size)
+          val wall=math.max(l.requiredWall,c.effectiveWall)
+          val con=l.connectors:+c
+          val terminal=RiderTerminal(mode,l.transfer+connectorTransferSeconds(c),l.road+c.roadStressSeconds,wall,rm,climb,l.warmupPenalty,l.demandingAdjacency,l.order,con,l.signature(trails)+"|"+c.id)
+          if terminalIsEligibleUpgrade(terminal,baseline,previousCeiling) then
+            eligibleCandidates += 1
+            insertTradeoffFrontier(tradeoffFrontier,terminal)
+        }
+      }
+      terminalGroupsDone += 1
+    }
+    appendLiveDebug(
+      f"rider-terminal DONE $debugLabel candidates=$terminalCandidatesChecked eligible=$eligibleCandidates frontier=${tradeoffFrontier.size} bestFound=${!tradeoffFrontier.isEmpty} elapsed=${(System.nanoTime()-terminalStarted)/1e9}%.3fs"
+    )
+    val kneeSelection=selectParetoKneeFromFrontier(tradeoffFrontierValues(tradeoffFrontier))
+    kneeSelection.foreach { k =>
+      val tf=k.transferFirst; val cf=k.comfortFirst; val kn=k.selected
+      appendLiveDebug(
+        f"rider-policy $debugLabel frontier=${k.frontierSize}%d " +
+          f"fast=${tf.transfer}%.1f/${tf.rider.candHard}%.1f " +
+          f"knee=${kn.transfer}%.1f/${kn.rider.candHard}%.1f score=${k.score}%.4f " +
+          f"comfort=${cf.transfer}%.1f/${cf.rider.candHard}%.1f " +
+          f"fractions=transfer:${k.transferFraction}%.3f,comfort:${k.comfortFraction}%.3f"
+      )
+    }
+    val selectedFront=kneeSelection.map(_.selected).toVector
+    appendLiveDebug(
+      f"rider-selector DONE $debugLabel policy=pareto-knee eligible=$eligibleCandidates frontier=${tradeoffFrontier.size}%d returned=${selectedFront.size} elapsed=${(System.nanoTime()-terminalStarted)/1e9}%.3fs"
+    )
+    appendLiveDebug(
+      f"rider-dp DONE $debugLabel eligible-terminals=$eligibleCandidates selected=${selectedFront.size} generated=$generatedLabels baselinePruned=$baselinePruned " +
+        f"insertCalls=${perf.insertCalls} dominanceChecks=${perf.dominanceChecks} insertSec=${perf.insertNanos/1e9}%.3f totalSec=${(System.nanoTime()-dpStarted)/1e9}%.3f"
+    )
+    selectedFront
+
+  def riderTerminalNoWorse(a:RiderTerminal,b:RiderTerminal):Boolean =
+    val ar=a.rider;val br=b.rider
+    a.transfer<=b.transfer&&ar.candHard<=br.candHard&&streakNoWorse(ar.streak120,br.streak120)&&streakNoWorse(ar.streak140,br.streak140)&&ar.spike<=br.spike&&a.road<=b.road&&a.climb.maxAscent<=b.climb.maxAscent&&a.climb.upward<=b.climb.upward&&a.climb.roughness<=b.climb.roughness&&a.warmupPenalty<=b.warmupPenalty&&a.demandingAdjacency<=b.demandingAdjacency&&a.requiredWall<=b.requiredWall
+  def riderTerminalStrict(a:RiderTerminal,b:RiderTerminal):Boolean = a.transfer<b.transfer||a.rider.candHard<b.rider.candHard||a.rider.streak120.localMax<b.rider.streak120.localMax||a.rider.streak140.localMax<b.rider.streak140.localMax||a.rider.spike<b.rider.spike||a.road<b.road||a.climb.maxAscent<b.climb.maxAscent||a.climb.upward<b.climb.upward||a.climb.roughness<b.climb.roughness||a.warmupPenalty<b.warmupPenalty||a.demandingAdjacency<b.demandingAdjacency||a.requiredWall<b.requiredWall
+
+  def paretoRiderTerminals(
+      v:Vector[RiderTerminal],
+      prev:Option[Double],
+      debugLabel:Option[String]=None
+  ):Vector[RiderTerminal] =
+    val started=System.nanoTime()
+    val kept=Vector.newBuilder[RiderTerminal]
+    var keptCount=0L
+    var bi=0
+    var comparisons=0L
+    var nextComparisonHeartbeat=25_000_000L
+    while bi < v.size do
+      val b=v(bi)
+      var ai=0
+      var dominated=false
+      while ai < v.size && !dominated do
+        val a=v(ai)
+        comparisons += 1
+        if
+          a.signature != b.signature &&
+          prev.forall(pc=>(a.requiredWall>pc)==(b.requiredWall>pc)) &&
+          riderTerminalNoWorse(a,b) &&
+          riderTerminalStrict(a,b)
+        then dominated=true
+        ai += 1
+        if comparisons >= nextComparisonHeartbeat then
+          debugLabel.foreach { label =>
+            appendLiveDebug(
+              f"rider-pareto HEARTBEAT $label rows=$bi/${v.size} comparisons=$comparisons kept-so-far=$keptCount elapsed=${(System.nanoTime()-started)/1e9}%.3fs"
+            )
+          }
+          nextComparisonHeartbeat += 25_000_000L
+      if !dominated then
+        kept += b
+        keptCount += 1
+      bi += 1
+      if bi == 1 || bi % 5000 == 0 || bi == v.size then
+        debugLabel.foreach { label =>
+          appendLiveDebug(
+            f"rider-pareto PROGRESS $label rows=$bi/${v.size} comparisons=$comparisons elapsed=${(System.nanoTime()-started)/1e9}%.3fs"
+          )
+        }
+    kept.result().sortBy(_.signature)
+
+  def evaluateRaw(raw:RawTerminal,trails:Vector[Trail]):RiderTerminal =
+    var rm=RiderMetrics.Empty; var climb=ClimbState.Empty
+    raw.order.zipWithIndex.foreach { case(idx,k)=>
+      rm=rm.concat(raw.connectors(k).rider).concat(trails(idx).rider); climb=climb.add(raw.connectors(k).ascentM,k)
+    }
+    val finish=raw.connectors.last; rm=rm.concat(finish.rider); climb=climb.add(finish.ascentM,raw.connectors.size-1)
+    RiderTerminal(raw.mode,raw.transfer,raw.road,raw.wall,rm,climb,warmupAfter(raw.order,trails),adjacency(raw.order,trails),raw.order,raw.connectors,raw.signature)
+
+  def eligibleUpgrade(c:RiderTerminal,b:RiderTerminal,classIdx:Int,classes:Vector[Double]):Boolean =
+    val genuine=if classIdx==0 then c.requiredWall<=classes(0) else c.requiredWall>classes(classIdx-1) && c.requiredWall<=classes(classIdx)
+    genuine && c.rider.candHard<b.rider.candHard && c.rider.streak120.localMax<=b.rider.streak120.localMax && c.rider.streak140.localMax<=b.rider.streak140.localMax && c.rider.spike<=b.rider.spike && c.road<=b.road && c.climb.maxAscent<=b.climb.maxAscent && c.climb.upward<=b.climb.upward && c.climb.roughness<=b.climb.roughness && c.warmupPenalty<=b.warmupPenalty && c.demandingAdjacency<=b.demandingAdjacency
+
+  def chooseFinal(front:Vector[RiderTerminal],baseline:RiderTerminal,classIdx:Int,classes:Vector[Double]):RiderTerminal =
+    val e=front.filter(c=>eligibleUpgrade(c,baseline,classIdx,classes))
+    selectParetoKnee(e).map(_.selected).getOrElse(baseline)
+
+  def sameHorizontalPoint(a:Point,b:Point):Boolean = a.lat==b.lat && a.lon==b.lon
+  def exactPoint(a:Point,b:Point):Boolean = sameHorizontalPoint(a,b) && a.ele==b.ele
+
+  def reconstruct(route:RiderTerminal,trails:Vector[Trail]):Vector[Point] =
+    val out=mutable.ArrayBuffer.empty[Point]
+
+    def appendConnector(ps:Vector[Point]):Unit =
+      if ps.nonEmpty then
+        // When a connector begins exactly at the canonical mandatory endpoint,
+        // keep the mandatory point/elevation already present and drop only the
+        // duplicate connector boundary point.
+        if out.lastOption.exists(q=>sameHorizontalPoint(q,ps.head)) then out++=ps.drop(1)
+        else out++=ps
+
+    def appendMandatory(ps:Vector[Point]):Unit =
+      if ps.nonEmpty then
+        // At connector -> mandatory joins, canonical GPX geometry/elevation wins.
+        // This removes only an exact horizontal duplicate stitch point and keeps
+        // the complete supplied mandatory sequence unchanged.
+        if out.lastOption.exists(q=>sameHorizontalPoint(q,ps.head)) then
+          out(out.size-1)=ps.head
+          out++=ps.drop(1)
+        else out++=ps
+
+    route.order.zipWithIndex.foreach { case(idx,k) =>
+      appendConnector(route.connectors(k).geometry)
+      appendMandatory(trails(idx).points)
+    }
+    appendConnector(route.connectors.last.geometry)
+    out.toVector
+  def countSubsequence(hay:Vector[Point],needle:Vector[Point]):Int =
+    if needle.isEmpty||hay.size<needle.size then 0 else (0 to hay.size-needle.size).count(i=>needle.indices.forall(j=>exactPoint(hay(i+j),needle(j))))
+
+  def auditClose(a:Double,b:Double,eps:Double=1e-8):Boolean =
+    a.isFinite && b.isFinite && math.abs(a-b)<=eps
+
+  def auditSameStreak(a:Streak,b:Streak):Boolean =
+    a.allAbove==b.allAbove &&
+      auditClose(a.prefix,b.prefix) && auditClose(a.suffix,b.suffix) &&
+      auditClose(a.localMax,b.localMax) && auditClose(a.duration,b.duration)
+
+  def auditSameRider(a:RiderMetrics,b:RiderMetrics):Boolean =
+    auditClose(a.duration,b.duration) && auditClose(a.t120,b.t120) &&
+      auditClose(a.t140,b.t140) && auditClose(a.t160,b.t160) &&
+      auditClose(a.spike,b.spike) && auditSameStreak(a.streak120,b.streak120) &&
+      auditSameStreak(a.streak140,b.streak140) && auditSameStreak(a.streak180,b.streak180)
+
+  def auditSameClimb(a:ClimbState,b:ClimbState):Boolean =
+    a.count==b.count && auditClose(a.maxAscent,b.maxAscent) &&
+      auditClose(a.upward,b.upward) && auditClose(a.roughness,b.roughness) &&
+      ((a.prevAscent,b.prevAscent) match
+        case (None,None) => true
+        case (Some(x),Some(y)) => auditClose(x,y)
+        case _ => false) &&
+      ((a.prevDelta,b.prevDelta) match
+        case (None,None) => true
+        case (Some(x),Some(y)) => auditClose(x,y)
+        case _ => false)
+
+  /** Independent component-wise rider recomputation used by final audit.
+   * Connectors use transfer physics; canonical mandatory trails use their
+   * production technical downhill cap. Keeping this in one helper prevents
+   * audit/search drift when rider physics evolves.
+   */
+  def recomputeRouteRider(route:RiderTerminal,trails:Vector[Trail]):RiderMetrics =
+    var rm=RiderMetrics.Empty
+    route.order.zipWithIndex.foreach { case(trailIndex,k) =>
+      val connector=route.connectors(k)
+      rm=rm
+        .concat(physics(connector.geometry,lengthWeightedCrr(connector.edges)))
+        .concat(physics(trails(trailIndex).points,0.010,Some(TrailDownhillMaxKph)))
+    }
+    rm.concat(physics(route.connectors.last.geometry,lengthWeightedCrr(route.connectors.last.edges)))
+
+  def audit(route:RiderTerminal,ceiling:Double,mode:Mode,trails:Vector[Trail],avoids:Vector[Gpx],evidence:Vector[EvidenceCorridor],finalGeom:Vector[Point]):AuditResult =
+    val f=mutable.ArrayBuffer.empty[String]; val w=mutable.ArrayBuffer.empty[String]
+    val protectedCorridors=
+      trails.map(t => ProtectedCorridor(t.name,t.points,"mandatory")) ++
+        avoids.map(a => ProtectedCorridor(a.name,a.points,"avoid"))
+    if route.mode!=mode then f += s"endpoint mode mismatch: route=${route.mode}, expected=$mode"
+    val unknown=route.order.filter(i=>i<0 || i>=trails.size)
+    if unknown.nonEmpty then f += s"unknown mandatory indices: ${unknown.distinct.sorted.mkString(",")}"
+    if route.order.size!=trails.size || route.order.distinct.size!=trails.size || route.order.toSet!=trails.indices.toSet then f += "mandatory exactly-once/order-set failure"
+    trails.foreach { t =>
+      val fresh=demandingMeasurements(t.points)
+      if fresh.demanding!=t.demanding.demanding then f += s"${t.name}: demanding classification recomputation mismatch"
+    }
+    if unknown.isEmpty then
+      if route.order.headOption.exists(i=>trails(i).demanding.demanding) then f += "demanding trail first"
+      val firstDem=route.order.indexWhere(i=>trails(i).demanding.demanding)
+      if firstDem==0 then f += "zero warmups before demanding"
+    trails.foreach { t =>
+      val fw=countSubsequence(finalGeom,t.points); val rv=countSubsequence(finalGeom,t.points.reverse)
+      if fw!=1 then f += s"${t.name}: supplied mandatory sequence count=$fw"
+      if rv>0 && t.points!=t.points.reverse then f += s"${t.name}: reversed mandatory sequence present"
+    }
+    if route.connectors.size!=trails.size+1 then f += s"connector count ${route.connectors.size}, expected ${trails.size+1}"
+    else if unknown.isEmpty && route.order.size==trails.size then
+      if route.connectors.head.from!="START" then f += "first connector does not start at station role"
+      if route.connectors.last.to!=mode.finishKey then f += s"finish connector role ${route.connectors.last.to}, expected ${mode.finishKey}"
+      route.order.indices.foreach { k =>
+        val trail=trails(route.order(k))
+        if route.connectors(k).to!=trail.name then f += s"connector $k does not enter ${trail.name}"
+        if k>0 then
+          val prev=trails(route.order(k-1))
+          if route.connectors(k).from!=prev.name then f += s"connector $k does not leave ${prev.name}"
+      }
+      if route.connectors.last.from!=trails(route.order.last).name then f += "finish connector does not leave last mandatory"
+
+      val recomputedWarmup=warmupAfter(route.order,trails)
+      val recomputedAdjacency=adjacency(route.order,trails)
+      if recomputedWarmup==Int.MaxValue then f += "zero warmups before demanding"
+      else if route.warmupPenalty!=recomputedWarmup then
+        f += s"warmupPenalty mismatch: stored=${route.warmupPenalty}, recomputed=$recomputedWarmup"
+      if route.demandingAdjacency!=recomputedAdjacency then
+        f += s"demandingAdjacency mismatch: stored=${route.demandingAdjacency}, recomputed=$recomputedAdjacency"
+
+      val recomputedRider=recomputeRouteRider(route,trails)
+      var recomputedClimb=ClimbState.Empty
+      var recomputedTransfer=0.0
+      var recomputedRoad=0.0
+      route.order.zipWithIndex.foreach { case(_,k) =>
+        val connector=route.connectors(k)
+        recomputedClimb=recomputedClimb.add(ascent(connector.geometry),k)
+        recomputedTransfer += connectorTransferSeconds(connector)
+        recomputedRoad += roadStress(connector.edges,connector.traceGeometry)
+      }
+      val finishConnector=route.connectors.last
+      recomputedClimb=recomputedClimb.add(ascent(finishConnector.geometry),route.connectors.size-1)
+      recomputedTransfer += connectorTransferSeconds(finishConnector)
+      recomputedRoad += roadStress(finishConnector.edges,finishConnector.traceGeometry)
+      if !auditClose(route.transfer,recomputedTransfer) then
+        f += f"transfer mismatch: stored=${route.transfer}%.6f recomputed=$recomputedTransfer%.6f"
+      if !auditClose(route.road,recomputedRoad) then
+        f += f"road mismatch: stored=${route.road}%.6f recomputed=$recomputedRoad%.6f"
+      if !auditSameRider(route.rider,recomputedRider) then f += "rider metrics recomputation mismatch"
+      if !auditSameClimb(route.climb,recomputedClimb) then f += "climb-shape metrics recomputation mismatch"
+    if finalGeom.isEmpty then f += "empty reconstructed route"
+    else
+      if haversine(finalGeom.head,Start)>5 then f += f"start gap ${haversine(finalGeom.head,Start)}%.1f m >5m"
+      if haversine(finalGeom.last,mode.finishPoint)>5 then f += f"finish gap ${haversine(finalGeom.last,mode.finishPoint)}%.1f m >5m"
+    val recomputedWalls=mutable.ArrayBuffer.empty[Double]
+    route.connectors.foreach { c =>
+      val gap=maxPointGap(c.geometry)
+      if gap>=250.0 then f+=f"${c.from}->${c.to}: connector point gap $gap%.1fm >=250m"
+      val sr=safetyReasons(c.edges,c.traceGeometry); sr.foreach(x=>f+=s"${c.from}->${c.to}: $x")
+      if c.edges.isEmpty then f += s"${c.from}->${c.to}: missing trace edges"
+      if c.edges.exists(e=>e.begin<0||e.end<e.begin||e.begin>=c.traceGeometry.size||e.end>=c.traceGeometry.size) then f += s"${c.from}->${c.to}: invalid edge/geometry correspondence"
+      protectedCorridors.foreach { corridor =>
+        val ov=continuousCoTravel(c.geometry,corridor.points,AvoidToleranceM)
+        if ov>AvoidToleranceM then
+          f+=f"${c.from}->${c.to}: protected ${corridor.label} overlap $ov%.1fm"
+        else if ov>0 then
+          w+=f"${c.from}->${c.to}: protected ${corridor.label} overlap $ov%.1fm"
+      }
+      val crr=lengthWeightedCrr(c.edges); val rm=physics(c.geometry,crr); val wm=wallMetrics(c.geometry,rm)
+      if !auditClose(crr,c.crr) then f+=s"${c.from}->${c.to}: Crr recomputation mismatch"
+      if !auditSameRider(rm,c.rider) then f+=s"${c.from}->${c.to}: connector rider recomputation mismatch"
+      if !auditClose(wm.max30Pct,c.wall.max30Pct) || !auditClose(wm.max100Pct,c.wall.max100Pct) || !auditClose(wm.above180Seconds,c.wall.above180Seconds) then
+        f+=s"${c.from}->${c.to}: connector wall metrics recomputation mismatch"
+      if wm.max30Pct>=27 then f+=f"${c.from}->${c.to}: max30 ${wm.max30Pct}%.2f%%"
+      if wm.max100Pct>=20 then f+=f"${c.from}->${c.to}: max100 ${wm.max100Pct}%.2f%%"
+      if wm.above180Seconds>=90 then f+=f"${c.from}->${c.to}: >180W streak ${wm.above180Seconds}%.1fs"
+      val (floor,apps)=applyEvidence(s"${c.from} -> ${c.to}",c.geometry,wm,evidence)
+      val physical=wm.physicalSeverity
+      val eff=math.max(physical,floor)
+      recomputedWalls+=eff
+      if !auditClose(physical,c.physicalWall) then f+=s"${c.from}->${c.to}: physical wall severity recomputation mismatch"
+      if !auditClose(floor,c.evidenceFloor) then f+=s"${c.from}->${c.to}: evidence floor recomputation mismatch"
+      if apps!=c.evidence then f+=s"${c.from}->${c.to}: evidence provenance recomputation mismatch"
+      if !auditClose(eff,c.effectiveWall) then f+=s"${c.from}->${c.to}: effective wall recomputation mismatch"
+    }
+    if recomputedWalls.nonEmpty then
+      val req=recomputedWalls.max
+      if !auditClose(req,route.requiredWall) then
+        f+=f"requiredWall mismatch: stored=${route.requiredWall}%.9f recomputed=$req%.9f"
+      if req>ceiling then f+=f"requiredWall $req%.6f > class ceiling $ceiling%.6f"
+    finalGeom.sliding(2).foreach { case Vector(a,b) =>
+      val d=haversine(a,b); if d>=250 then f+=f"point gap $d%.1fm >=250m" else if d>=100 then w+=f"point gap $d%.1fm"
+      case _=>
+    }
+    AuditResult(f.toVector.distinct,w.toVector.distinct)
+
+
+  def xmlEscape(s:String):String = s.flatMap {case '&'=>"&amp;";case '<'=>"&lt;";case '>'=>"&gt;";case '"'=>"&quot;";case '\''=>"&apos;";case c=>c.toString}
+
+  def writeGpx(path:Path,name:String,points:Vector[Point]):Result[Unit] =
+    boundary(s"write GPX $path") {
+      val writer=Files.newBufferedWriter(path,StandardCharsets.UTF_8)
+      try
+        writer.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        writer.write(
+          s"<gpx xmlns=\"http://www.topografix.com/GPX/1/1\" version=\"1.1\" creator=\"$BuildId\">\n<trk><name>${xmlEscape(name)}</name><trkseg>\n"
         )
-      humanQualityRouteFromConnectorSequence(legacy.order, legacy.connectors)
+        points.foreach { p =>
+          writer.write(
+            f"<trkpt lat=\"${p.lat}%.7f\" lon=\"${p.lon}%.7f\"><ele>${p.ele}%.6f</ele></trkpt>\n"
+          )
+        }
+        writer.write("</trkseg></trk></gpx>\n")
+      finally writer.close()
+    }
+
+
+  def fmtSec(x:Double):String =
+    val s=math.round(x).toLong; f"${s/3600}%d:${(s%3600)/60}%02d:${s%60}%02d"
+  def fmtShort(x:Double):String =
+    val s=math.round(x).toLong; f"${s/60}%d:${s%60}%02d"
+
+  def routeLine(label:String,r:RiderTerminal,ceiling:Double,trails:Vector[Trail],audit:AuditResult):String =
+    val order=r.order.map(i=>trails(i).name).mkString(" -> ")
+    f"$label | ${r.mode} | wall=${r.requiredWall}%.6f <= $ceiling%.6f | order=$order | transfer=${fmtSec(r.transfer)} | candHard=${fmtShort(r.rider.candHard)} | low=${fmtShort(r.rider.streak120.localMax)} | high=${fmtShort(r.rider.streak140.localMax)} | spike=${r.rider.spike}%.2f | road=${fmtShort(r.road)} | maxAscent=${r.climb.maxAscent}%.1f | upwardViolation=${r.climb.upward}%.1f | roughness=${r.climb.roughness}%.1f | audit=${audit.status}"
+
+  def routeDistanceKm(points:Vector[Point]):Double =
+    points.sliding(2).map {
+      case Vector(a,b) => haversine(a,b)
+      case _ => 0.0
+    }.sum / 1000.0
+
+  def routeTransferAscentM(r:RiderTerminal):Double =
+    r.connectors.map(_.ascentM).sum
+
+  def routeMaxConnector100Pct(r:RiderTerminal):Double =
+    r.connectors.map(_.wall.max100Pct).foldLeft(0.0)(math.max)
+
+  def endpointLabel(mode:Mode):String =
+    mode match
+      case Mode.LOOP => StartName
+      case Mode.P2P => P2PFinishName
+
+  def humanWatchLines(r:RiderTerminal,audit:AuditResult,limit:Int=4):Vector[String] =
+    val road =
+      r.connectors
+        .filter(_.roadStressSeconds > 0.5)
+        .sortBy(c => (-c.roadStressSeconds, c.from, c.to))
+        .map(c => s"${c.from} -> ${c.to}: road-stress exposure ${fmtShort(c.roadStressSeconds)}")
+
+    val steep =
+      r.connectors
+        .filter(_.wall.max100Pct > 0.0)
+        .sortBy(c => (-c.wall.max100Pct, c.from, c.to))
+        .map(c => f"${c.from} -> ${c.to}: max sustained 100 m uphill grade ${c.wall.max100Pct}%.1f%%")
+
+    // Audit warnings are already independent final-output checks.  Put them
+    // after road/grade items so day.txt remains useful to a rider, while the
+    // complete audit remains in day.debug.txt.
+    val auditItems = audit.warnings.sorted
+    val all = (road ++ steep ++ auditItems).distinct
+    val visible = all.take(limit)
+    if all.size > limit then visible :+ s"... ${all.size-limit} more watch item(s); see day.debug.txt"
+    else visible
+
+  def humanReport(
+      classes:Vector[Double],
+      assignment:Assignment,
+      finals:Vector[RiderTerminal],
+      geometries:Vector[Vector[Point]],
+      trails:Vector[Trail],
+      audits:Vector[AuditResult]
+  ):String =
+    val fileNames=Vector("day.gpx","day.wall-c2.gpx","day.wall-c3.gpx")
+    val b=new StringBuilder
+    b.append("MTB DAY PLAN\n============\n")
+    b.append(s"Planner build: $BuildId\n\n")
+    b.append(s"Mandatory technical GPXs: ${trails.size}.\n")
+    b.append(
+      "Selected endpoint roles: " +
+        finals.indices.map { i =>
+          s"DAY-C${i+1} $StartName -> ${endpointLabel(assignment.modes(i))}"
+        }.mkString("; ") +
+        ".\n"
+    )
+    val pauseSeconds=trails.size * 2.0 * HumanReportTrailPauseMin * 60.0
+    b.append(
+      f"Planning-time convention: modeled moving time + ${HumanReportTrailPauseMin}%.0f min before and after each mandatory trail " +
+        s"(report only; +${fmtShort(pauseSeconds)} for ${trails.size} trails).\n\n"
+    )
+
+    finals.indices.foreach { i =>
+      val r=finals(i)
+      val audit=audits(i)
+      val moving=r.rider.duration
+      val planned=moving+pauseSeconds
+      val endpoint=endpointLabel(r.mode)
+      val order=(Vector(StartName) ++ r.order.map(j=>trails(j).name) ++ Vector(endpoint)).mkString(" -> ")
+      b.append(s"DAY-C${i+1} — ${fileNames(i)}\n")
+      b.append(
+        f"  ${routeDistanceKm(geometries(i))}%.2f km | moving ${fmtSec(moving)} | planned ${fmtSec(planned)} | " +
+          f"transfer ${fmtSec(r.transfer)} | transfer +${routeTransferAscentM(r)}%.0f m\n"
+      )
+      b.append(
+        f"  candHard ${fmtShort(r.rider.candHard)} | road ${fmtShort(r.road)} | wall ${r.requiredWall}%.6f <= ${classes(i)}%.6f | " +
+          f"max100 ${routeMaxConnector100Pct(r)}%.1f%% | audit ${audit.status}\n"
+      )
+      b.append(s"  $StartName -> $endpoint\n")
+      b.append(s"  $order\n")
+      b.append(
+        f"  metrics: low=${fmtShort(r.rider.streak120.localMax)} high=${fmtShort(r.rider.streak140.localMax)} " +
+          f"spike=${r.rider.spike}%.2f maxAscent=${r.climb.maxAscent}%.1f " +
+          f"upwardViolation=${r.climb.upward}%.1f roughness=${r.climb.roughness}%.1f\n"
+      )
+      humanWatchLines(r,audit).foreach(w => b.append(s"  WATCH: $w\n"))
+      b.append("\n")
+    }
+
+    if audits.head.status=="WARN" then
+      b.append("C1 audit is WARN; review WATCH lines above and day.debug.txt before riding.\n\n")
+    else if audits.head.status=="FAIL" then
+      b.append("C1 audit is FAIL — do not ride until debugged.\n\n")
+    else
+      b.append("C1 audit: PASS.\n\n")
+
+    b.append(
+      "FILES\n-----\n" +
+        "C1 day variant: day.gpx\n" +
+        "C2 day variant: day.wall-c2.gpx\n" +
+        "C3 day variant: day.wall-c3.gpx\n" +
+        "Diagnostics: day.debug.txt\n"
+    )
+    b.result()
+
+  val ProductionFiles:Set[String] =
+    Set("day.gpx","day.wall-c2.gpx","day.wall-c3.gpx","day.txt","day.debug.txt")
+
+  @volatile var LiveDebugPath:Path=Paths.get("day.debug.txt")
+  @volatile var LiveDebugStartNanos:Long=System.nanoTime()
+  @volatile var LiveDebugLastNanos:Long=LiveDebugStartNanos
+
+  def prepareOutput(dir:Path):Result[Unit] =
+    boundary(s"prepare output directory $dir") {
+      Files.createDirectories(dir)
+      val liveDebug=LiveDebugPath.toAbsolutePath.normalize
+      ProductionFiles.foreach { name =>
+        val target=dir.resolve(name)
+        val isLiveDebug=
+          name == "day.debug.txt" &&
+            target.toAbsolutePath.normalize == liveDebug
+        if !isLiveDebug then Files.deleteIfExists(target)
+      }
+      ()
+    }
+
+  def verifyProductionFiles(dir:Path):Result[Unit] =
+    val missing=ProductionFiles.filterNot(name => Files.isRegularFile(dir.resolve(name)))
+    if missing.isEmpty then Right(())
+    else Left(s"missing production outputs: ${missing.toVector.sorted.mkString(", ")}")
+
+
+  case class RunResult(classes:Vector[Double],assignment:Assignment,finals:Vector[RiderTerminal],audits:Vector[AuditResult],demanding:Vector[String],diag:Diagnostics,valhallaStatus:String,breaks:Vector[Breakpoint],allAssignments:Vector[Assignment],baselines:Vector[RiderTerminal])
+
+  def runRiderClasses(
+      classes:Vector[Double],
+      assignment:Assignment,
+      loopFront:Vector[RawTerminal],
+      p2pFront:Vector[RawTerminal],
+      trails:Vector[Trail],
+      graph:Map[(String,String),Vector[Connector]],
+      diag:Diagnostics
+  ):Result[(Vector[RiderTerminal],Vector[RiderTerminal])] =
+    def step(
+        classIndex:Int,
+        finals:Vector[RiderTerminal],
+        baselines:Vector[RiderTerminal]
+    ):Result[(Vector[RiderTerminal],Vector[RiderTerminal])] =
+      if classIndex >= classes.size then Right((finals,baselines))
+      else
+        val mode=assignment.modes(classIndex)
+        val rawFront=if mode == Mode.LOOP then loopFront else p2pFront
+        fastestRaw(rawFront,classes(classIndex)) match
+          case None => Left(s"no RAW baseline for C${classIndex+1} $mode")
+          case Some(rawBase) =>
+            val baseline=evaluateRaw(rawBase,trails)
+            val started=System.nanoTime()
+            val debugLabel=s"C${classIndex+1}-$mode"
+            appendLiveDebug(
+              f"phase=rider C${classIndex+1} START mode=$mode ceiling=${classes(classIndex)}%.9f baselineCandHard=${baseline.rider.candHard}%.3f baselineLow=${baseline.rider.streak120.localMax}%.3f baselineHigh=${baseline.rider.streak140.localMax}%.3f baselineSpike=${baseline.rider.spike}%.3f baselineRoad=${baseline.road}%.3f"
+            )
+            val riderFront=riderDp(
+              mode,
+              classes(classIndex),
+              if classIndex == 0 then None else Some(classes(classIndex-1)),
+              baseline,
+              debugLabel,
+              trails,
+              graph
+            )
+            appendLiveDebug(s"phase=rider C${classIndex+1} DONE selectedUpgradeCandidates=${riderFront.size}")
+            diag.riderFrontierSizes(s"C${classIndex+1}-${mode}")=riderFront.size
+            diag.timings+=(s"rider C${classIndex+1}"->((System.nanoTime()-started)/1e9))
+            val selected=chooseFinal(riderFront,baseline,classIndex,classes)
+            step(classIndex+1,finals :+ selected,baselines :+ baseline)
+
+    step(0,Vector.empty,Vector.empty)
+
+  def runProduction(input:Path,output:Path,url:String):Result[RunResult] =
+    val started=System.nanoTime()
+    val diag=Diagnostics()
+
+    prepareOutput(output).flatMap { _ =>
+      appendLiveDebug("phase=input-load START")
+
+      loadInputs(input).flatMap { case(trails,avoids,reals) =>
+        val demanding=trails.filter(_.demanding.demanding).map(_.name)
+        appendLiveDebug(
+          s"phase=input-load DONE mandatory=${trails.size} avoid=${avoids.size} real=${reals.size} demanding=${demanding.mkString(",")}"
+        )
+
+        buildRealRideEvidence(reals,trails).flatMap { evidence =>
+          appendLiveDebug(
+            s"phase=real-ride-preprocess DONE corridors=${evidence.size} evidenceCandidates=${evidence.map(_.candidates.size).sum} " +
+              s"byTransfer=${evidence.map(e=>s"${e.label}:${e.candidates.size}").mkString("[",",","]")}"
+          )
+
+          val client=ValhallaClient(url)
+          client.status().flatMap { status =>
+            appendLiveDebug(s"phase=valhalla-status DONE ${status.replaceAll("\\s+"," ").take(300)}")
+            appendLiveDebug("phase=connector-graph START")
+            val graphStarted=System.nanoTime()
+
+            buildGraph(client,trails,avoids,evidence,diag).flatMap { graph =>
+              diag.timings+=("connector graph"->((System.nanoTime()-graphStarted)/1e9))
+              appendLiveDebug("phase=connector-graph DONE " + graphDiagnostic(trails,graph,diag))
+              appendLiveDebug("valhalla-cache " + client.cacheStats)
+              graphNodeDiagnostics(trails,graph).foreach(appendLiveDebug)
+
+              val loopReachable=hasCompleteOrder(Mode.LOOP,trails,graph)
+              val p2pReachable=hasCompleteOrder(Mode.P2P,trails,graph)
+              appendLiveDebug(s"graph-reachability LOOP=$loopReachable P2P=$p2pReachable")
+
+              if !loopReachable || !p2pReachable then
+                val missing=Vector(
+                  if !loopReachable then Some("LOOP") else None,
+                  if !p2pReachable then Some("P2P") else None
+                ).flatten.mkString(" and ")
+                Left(s"connector graph has no complete mandatory order for $missing")
+              else
+                val rawStarted=System.nanoTime()
+                appendLiveDebug("phase=RAW START")
+                val loopFront=rawDp(Mode.LOOP,trails,graph)
+                val p2pFront=rawDp(Mode.P2P,trails,graph)
+                diag.rawFrontierSizes("LOOP")=loopFront.size
+                diag.rawFrontierSizes("P2P")=p2pFront.size
+                appendLiveDebug(
+                  s"phase=RAW DONE loopFrontier=${loopFront.size} p2pFrontier=${p2pFront.size}"
+                )
+                loopFront.foreach(t => appendLiveDebug(rawTerminalDiagnostic(t,trails)))
+                p2pFront.foreach(t => appendLiveDebug(rawTerminalDiagnostic(t,trails)))
+
+                if loopFront.isEmpty || p2pFront.isEmpty then
+                  Left(s"RAW frontier empty: LOOP=${loopFront.size}, P2P=${p2pFront.size}")
+                else
+                  val breakpointsAll=(breakpoints(loopFront)++breakpoints(p2pFront))
+                    .sortBy(b => (b.ceiling,b.mode.toString,b.transfer,b.road,b.signature))
+                  val usefulSeverities=breakpointsAll.map(_.ceiling).distinct.sorted
+                  appendLiveDebug(
+                    s"wall-breakpoints usefulCount=${breakpointsAll.size} distinctUsefulLevels=${usefulSeverities.size}"
+                  )
+
+                  if usefulSeverities.size < 3 then
+                    val table=breakpointsAll.map(
+                      b => f"${b.mode} ${b.ceiling}%.9f ${b.transfer}%.3f ${b.road}%.3f ${b.signature}"
+                    ).mkString("\n")
+                    Left(s"RAW useful wall selector produced only ${usefulSeverities.size} distinct levels; breakpoints:\n$table")
+                  else
+                    // Canonical production selector: C1 is the first useful
+                    // wall level, C3 the last, and C2 the last interior useful
+                    // level. This is intentionally the validated old-product
+                    // policy, not an invented numeric target.
+                    val classes=Vector(
+                      usefulSeverities.head,
+                      usefulSeverities.drop(1).dropRight(1).last,
+                      usefulSeverities.last
+                    )
+                    appendLiveDebug(
+                      s"derived-wall-classes C1=${classes(0)} C2=${classes(1)} C3=${classes(2)}"
+                    )
+                    chooseAssignment(classes,loopFront,p2pFront) match
+                      case None => Left("expected exactly three feasible endpoint assignments")
+                      case Some((assignments,assignment)) =>
+                        diag.timings+=("RAW+classes+assignment"->((System.nanoTime()-rawStarted)/1e9))
+                        appendLiveDebug(s"endpoint-assignment DONE selected=${assignment.modes.mkString("/")}")
+
+                        runRiderClasses(
+                          classes,assignment,loopFront,p2pFront,trails,graph,diag
+                        ).flatMap { case(finals,baselines) =>
+                          val geometries=finals.map(reconstruct(_,trails))
+                          val audits=finals.zip(classes).zip(geometries).zipWithIndex.map {
+                            case(((route,ceiling),geometry),index) =>
+                              audit(route,ceiling,assignment.modes(index),trails,avoids,evidence,geometry)
+                          }
+
+                          val hardFailures=audits.zipWithIndex.flatMap {
+                            case(result,index) =>
+                              result.failures.map(message => s"C${index+1}: $message")
+                          }
+
+                          if hardFailures.nonEmpty then
+                            Left("final audit hard failure:\n"+hardFailures.mkString("\n"))
+                          else
+                            val summary=humanReport(
+                              classes,assignment,finals,geometries,trails,audits
+                            )
+
+                            val detailedDebug=
+                              renderProductionDebug(
+                                status,trails,avoids,reals,evidence,graph,diag,
+                                breakpointsAll,classes,assignments,assignment,
+                                baselines,finals,audits
+                              )
+
+                            val writes=Vector[Result[Unit]](
+                              writeGpx(output.resolve("day.gpx"),"DAY-C1",geometries(0)),
+                              writeGpx(output.resolve("day.wall-c2.gpx"),"DAY-C2",geometries(1)),
+                              writeGpx(output.resolve("day.wall-c3.gpx"),"DAY-C3",geometries(2)),
+                              boundary("write day.txt") {
+                                Files.writeString(output.resolve("day.txt"),summary,StandardCharsets.UTF_8)
+                                ()
+                              },
+                              boundary("write day.debug.txt") {
+                                diag.timings+=("total"->((System.nanoTime()-started)/1e9))
+                                val debugPath=output.resolve("day.debug.txt")
+                                val livePrefix =
+                                  if Files.isRegularFile(debugPath) then Files.readString(debugPath,StandardCharsets.UTF_8)
+                                  else ""
+                                val separator =
+                                  if livePrefix.isEmpty then ""
+                                  else "\n===== FINAL STRUCTURED DEBUG =====\n"
+                                Files.writeString(
+                                  debugPath,
+                                  livePrefix + separator + detailedDebug + renderTimings(diag),
+                                  StandardCharsets.UTF_8
+                                )
+                                ()
+                              }
+                            )
+
+                            sequence(writes).flatMap { _ =>
+                              verifyProductionFiles(output).map { _ =>
+                                RunResult(
+                                  classes,assignment,finals,audits,demanding,diag,status,
+                                  breakpointsAll,assignments,baselines
+                                )
+                              }
+                            }
+                        }
+            }
+          }
+        }
+      }
+    }
+
+  def renderTimings(diag:Diagnostics):String =
+    val b=new StringBuilder
+    b.append("Timings:\n")
+    diag.timings.foreach { case(name,seconds) =>
+      b.append(f"  $name: $seconds%.3fs\n")
+    }
+    b.toString
+
+  def renderProductionDebug(
+      status:String,
+      trails:Vector[Trail],
+      avoids:Vector[Gpx],
+      reals:Vector[Gpx],
+      evidence:Vector[EvidenceCorridor],
+      graph:Map[(String,String),Vector[Connector]],
+      diag:Diagnostics,
+      breakpointsAll:Vector[Breakpoint],
+      classes:Vector[Double],
+      assignments:Vector[Assignment],
+      assignment:Assignment,
+      baselines:Vector[RiderTerminal],
+      finals:Vector[RiderTerminal],
+      audits:Vector[AuditResult]
+  ):String =
+    val b=new StringBuilder
+    b.append(s"Build id: $BuildId\n")
+    b.append(s"Valhalla: $status\n")
+    b.append(
+      s"Input counts: mandatory=${trails.size}, avoid=${avoids.size}, real=${reals.size}\n"
+    )
+    b.append("Demanding classification:\n")
+    trails.foreach { t =>
+      b.append(
+        f"  ${t.name}: demanding=${t.demanding.demanding} wholeGrade=${t.demanding.wholeGradePct}%.6f%% sinuosity=${t.demanding.wholeSinuosity}%.6f local60Grade=${t.demanding.local60MaxGradePct}%.6f%% local60Sinu=${t.demanding.local60MaxSinuosity}%.6f pass60=${t.demanding.local60Pass} local100Grade=${t.demanding.local100MaxGradePct}%.6f%% local100Sinu=${t.demanding.local100MaxSinuosity}%.6f pass100=${t.demanding.local100Pass}\n"
+      )
+    }
+    b.append(
+      s"Connector candidates generated=${diag.generated}, noRoute=${diag.noRoute}, accepted=${diag.acceptedVariants}, retained=${diag.retained}, safetyReroutes=${diag.safetyReroutes}, safetyBlockedProfiles=${diag.safetyBlockedProfiles}\n"
+    )
+    if diag.safetyRerouteCorridors.nonEmpty then
+      b.append("Route-derived protected-corridor reroutes:\n")
+      diag.safetyRerouteCorridors.toVector.sortBy { case(_,count) => -count }.foreach {
+        case(name,count) => b.append(s"  $name=$count\n")
+      }
+    b.append("Hard rejections:\n")
+    diag.hardRejects.toVector.sortBy(_._1).foreach {
+      case(reason,count) => b.append(s"  $reason=$count\n")
+    }
+    b.append(s"Connector graph logical transitions=${graph.size}\n")
+    b.append(s"Evidence corridors=${evidence.size}; applied variants=${diag.evidenceApplied}\n")
+    evidence.foreach { corridor =>
+      val c30=corridor.candidates.count(_.windowM==30.0)
+      val c100=corridor.candidates.count(_.windowM==100.0)
+      b.append(s"  evidence ${corridor.label}: candidates30=$c30 candidates100=$c100\n")
+    }
+    b.append("RAW frontier sizes: "+diag.rawFrontierSizes.toVector.sortBy(_._1).mkString(", ")+"\n")
+    b.append("RAW useful breakpoints:\n")
+    breakpointsAll.foreach { bp =>
+      b.append(
+        f"  ${bp.mode} wall=${bp.ceiling}%.9f transfer=${bp.transfer}%.3f road=${bp.road}%.3f\n"
+      )
+    }
+    b.append(
+      "Derived classes: "+
+        classes.zipWithIndex.map { case(c,i) => f"C${i+1}=$c%.9f" }.mkString(", ")+
+        "\n"
+    )
+    b.append("Endpoint assignments:\n")
+    assignments.foreach { a =>
+      b.append(
+        s"  modes=${a.modes.mkString("/")} totalTransfer=${a.totalTransfer} totalRoad=${a.totalRoad} p2pIndex=${a.p2pIndex}\n"
+      )
+    }
+    b.append(s"Selected assignment: ${assignment.modes.mkString("/")}\n")
+    classes.indices.foreach { i =>
+      b.append(
+        "RAW baseline "+
+          routeLine(
+            s"C${i+1}",baselines(i),classes(i),trails,
+            AuditResult(Vector.empty,Vector.empty)
+          )+
+          "\n"
+      )
+      b.append(
+        s"Rider selector outputs C${i+1}: ${diag.riderFrontierSizes.getOrElse(s"C${i+1}-${assignment.modes(i)}",0)}\n"
+      )
+      b.append(
+        "Selected final "+
+          routeLine(s"C${i+1}",finals(i),classes(i),trails,audits(i))+
+          "\n"
+      )
+      b.append(s"  Connector diagnostics C${i+1}:\n")
+      finals(i).connectors.foreach { connector =>
+        val distanceM=connector.geometry.sliding(2).map {
+          case Vector(a,b) => haversine(a,b)
+          case _ => 0.0
+        }.sum
+        b.append(
+          f"    ${connector.from}->${connector.to} profile=${connector.profile.id} distance=${distanceM}%.1fm transfer=${connectorTransferSeconds(connector)}%.3fs road=${connector.roadStressSeconds}%.3fs max30=${connector.wall.max30Pct}%.3f%% max100=${connector.wall.max100Pct}%.3f%% p180=${connector.wall.above180Seconds}%.3fs physical=${connector.physicalWall}%.9f evidence=${connector.evidenceFloor}%.9f effective=${connector.effectiveWall}%.9f ascent=${connector.ascentM}%.1fm crr=${connector.crr}%.5f\n"
+        )
+      }
+      finals(i).connectors.zipWithIndex.foreach { case(connector,index) =>
+        connector.evidence.foreach { app =>
+          b.append(f"  EVIDENCE connector=$index ${connector.from}->${connector.to} corridor=${app.corridor} severity=${app.severity}%.6f details=${app.details.mkString(";")}\n")
+        }
+      }
+      audits(i).failures.foreach(failure => b.append(s"  FAIL $failure\n"))
+      audits(i).warnings.foreach(warning => b.append(s"  WARN $warning\n"))
+    }
+    b.toString
+
+
+  case class TestState(
+      var passed:Int=0,
+      var failed:Int=0,
+      failures:mutable.ArrayBuffer[String]=mutable.ArrayBuffer.empty,
+      lines:mutable.ArrayBuffer[String]=mutable.ArrayBuffer.empty
+  ):
+    def test(name:String)(body: => Unit):Unit =
+      Try(body) match
+        case Success(_) =>
+          passed += 1
+          val line=s"PASS $name"
+          lines += line
+          println(line)
+        case Failure(e) =>
+          failed += 1
+          val detail=s"$name: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+          failures += detail
+          val line=s"FAIL $detail"
+          lines += line
+          println(line)
+  def assertT(cond:Boolean,msg:String="assertion failed"):Unit=if !cond then throw new AssertionError(msg)
+  def near(a:Double,b:Double,eps:Double=1e-6)=assertT(math.abs(a-b)<=eps,s"$a != $b")
+
+  def syntheticLine(length:Double,startEle:Double,endEle:Double,wiggle:Boolean=false):Vector[Point] =
+    val lat=53.0; val lon=10.0; val steps=math.max(2,(length/10).toInt+1)
+    (0 until steps).map { i =>
+      val t=i.toDouble/(steps-1); val dy=length*t; val dx=if wiggle then 8*math.sin(t*math.Pi*6) else 0.0
+      Point(lat+dy/EarthR*180/math.Pi,lon+dx/(EarthR*math.cos(math.toRadians(lat)))*180/math.Pi,startEle+t*(endEle-startEle))
     }.toVector
 
-  def promotedMetricNoWorse(
-      selected: HumanQualityRoute,
-      reference: HumanQualityRoute
-  ): Boolean =
-    selected.warmup2Penalty <= reference.warmup2Penalty &&
-      selected.demandingAdjacencyCount <= reference.demandingAdjacencyCount &&
-      selected.roadStressSeconds <= reference.roadStressSeconds + 1e-9 &&
-      selected.climbShape.maxAscentM <= reference.climbShape.maxAscentM + 1e-9 &&
-      selected.climbShape.upwardViolationM <=
-        reference.climbShape.upwardViolationM + 1e-9 &&
-      selected.climbShape.roughnessM <= reference.climbShape.roughnessM + 1e-9 &&
-      selected.candidateLongestLowSeconds <=
-        reference.candidateLongestLowSeconds + 1e-9 &&
-      selected.candidateLongestHighSeconds <=
-        reference.candidateLongestHighSeconds + 1e-9 &&
-      selected.candidateSpikeLoadSeconds <=
-        reference.candidateSpikeLoadSeconds + 1e-9
+  def syntheticLocalDemand(windowM:Double,dropM:Double):Vector[Point] =
+    val lat0=53.0; val lon0=10.0; val cos0=math.cos(math.toRadians(lat0))
+    def point(north:Double,east:Double,ele:Double)=Point(lat0+north/EarthR*180/math.Pi,lon0+east/(EarthR*cos0)*180/math.Pi,ele)
+    val out=mutable.ArrayBuffer.empty[Point]
+    var north=0.0; var east=0.0; var ele=100.0
+    out+=point(north,east,ele)
+    for _ <- 0 until 20 do {north+=10;out+=point(north,east,ele)}
+    val steps=math.round(windowM/10.0).toInt
+    for i <- 0 until steps do
+      north+=6.0; east += (if i%2==0 then 8.0 else -8.0); ele=100.0-dropM*(i+1).toDouble/steps; out+=point(north,east,ele)
+    for _ <- 0 until 20 do {north+=10;out+=point(north,east,ele)}
+    out.toVector
 
-  def promotedWallActive(
-      classIndex: Int,
-      route: HumanQualityRoute
-  ): Boolean =
-    if classIndex == 0 then true
-    else
-      routeMaxUsedWallSeverity(route) >
-        productClassSeverities(classIndex - 1) + 1e-9
-
-  def rawTerrainRouteForPromotion(
-      endpointMode: RiderEndpointMode,
-      severity: Double
-  ): TerrainFrontierRoute =
-    exactWallBreakpointSeries
-      .find(_.endpointMode == endpointMode)
-      .flatMap(
-        _.rows.collectFirst {
-          case (candidateSeverity, route)
-              if math.abs(candidateSeverity - severity) <= 1e-9 =>
-            route
-        }.flatten
+  def runSelfTests(input:Option[Path]):TestState =
+    val ts=TestState()
+    ts.test("NFC identity") {assertT(nfc("Feuerlo\u0308scher")=="Feuerlöscher")}
+    ts.test("demanding whole-trail classification") {
+      val p = syntheticLine(100,100,70,wiggle=true)
+      val d = demandingMeasurements(p)
+      assertT(d.wholeGradePct >= 10.0, s"wholeGrade=${d.wholeGradePct}")
+      assertT(d.wholeSinuosity >= 1.10, s"wholeSinuosity=${d.wholeSinuosity}")
+      assertT(d.demanding)
+    }
+    ts.test("whole-trail demanding grade uses ridden length, not chord") {
+      val p=syntheticLine(100,100,89,wiggle=true)
+      val d=demandingMeasurements(p)
+      val cum=cumulative(p)
+      val expected=100.0*11.0/cum.last
+      near(d.wholeGradePct,expected,1e-6)
+      assertT(d.wholeGradePct < 11.0,s"grade unexpectedly chord-normalized: ${d.wholeGradePct}")
+    }
+    ts.test("road primary duration uses rider physics, not edge speed") {
+      val geom=syntheticLine(120,100,100)
+      val e=EdgeAttr("e",0,geom.size-1,120.0,100.0,"primary","road","paved","no",false,Double.NaN)
+      val run=EdgeRun(Vector(e),0,geom.size-1)
+      val modeled=modeledRunSeconds(geom,run)
+      assertT(modeled > e.seconds*2.0,s"modeled=$modeled edgeSpeed=${e.seconds}")
+      assertT(safetyReasons(Vector(e),geom).isEmpty,s"finite primary exposure unexpectedly hard-rejected: ${safetyReasons(Vector(e),geom)}")
+      assertT(roadStress(Vector(e),geom) > 0.0,"finite primary exposure must remain scored as road stress")
+    }
+    ts.test("cycle_lane none is unprotected") {
+      assertT(!protectedCycle("none"))
+      assertT(!protectedCycle("no"))
+      assertT(!protectedCycle("shared"))
+      assertT(protectedCycle("dedicated"))
+    }
+    ts.test("physics uses 30m grade chunks") {
+      val origin=Point(53.0,10.0,100.0)
+      def east(m:Double,ele:Double)=Point(
+        origin.lat,
+        origin.lon+math.toDegrees(m/(EarthR*math.cos(math.toRadians(origin.lat)))),
+        ele
       )
-      .getOrElse(
-        sys.error(
-          f"Promotion missing raw terrain route for ${endpointMode.text} wall<=$severity%.6f."
-        )
+      // A fake 10 m DEM spike should disappear when the 30 m production
+      // physics window is used; pointwise physics would create a huge >180 W streak.
+      val p=Vector(east(0,100),east(10,106),east(20,100),east(30,100))
+      val m=physics(p,0.010)
+      near(m.streak180.localMax,0.0,1e-9)
+    }
+    ts.test("downhill transfer coasts") {
+      val ride=segmentRide(-0.10,0.010,None)
+      assertT(ride.coasting,s"ride=$ride")
+      near(ride.riderPowerW,0.0,1e-12)
+    }
+    ts.test("demanding 60m local classification") {val d=demandingMeasurements(syntheticLocalDemand(60,11.4));assertT(d.local60Pass);assertT(!(d.wholeGradePct>=10&&d.wholeSinuosity>=1.10));assertT(!d.local100Pass)}
+    ts.test("demanding 100m local classification") {val d=demandingMeasurements(syntheticLocalDemand(100,16.0));assertT(d.local100Pass);assertT(!d.local60Pass);assertT(!(d.wholeGradePct>=10&&d.wholeSinuosity>=1.10))}
+    ts.test("canonical demanding set regression") {
+      input match
+        case None => assertT(false,"default tests require --input for canonical demanding regression")
+        case Some(in) =>
+          loadInputs(in) match
+            case Left(problem) => assertT(false,problem)
+            case Right((tr,_,_)) =>
+              val got=tr.filter(_.demanding.demanding).map(_.name).toSet
+              val exp=Set("Feuerlöscher","LittleWhistlerB")
+              assertT(got==exp,s"got ${got.toVector.sorted.mkString(",")}, expected ${exp.toVector.sorted.mkString(",")}")
+    }
+    ts.test("streak concatenation across boundary") {val a=Streak(0,4,4,false,10);val b=Streak(5,0,5,false,10);near(a.concat(b).localMax,9)}
+    ts.test("180W/90s independent hard safety") {val w=WallMetrics(5,5,90);assertT(w.hardInvalid);val comfort=RiderMetrics(90,90,90,90,Streak.constant(90,true),Streak.constant(90,true),Streak.constant(90,true),1);assertT(comfort.candHard>0)}
+    ts.test("real-ride wall evidence is directional") {
+      val candidate=syntheticLine(100,0,10,wiggle=false)
+      val forward=forwardEvidenceLocalGrade(candidate,candidate,100.0)
+      val reverse=forwardEvidenceLocalGrade(candidate,candidate.reverse,100.0)
+      assertT(forward.nonEmpty,"forward local evidence failed to match")
+      assertT(reverse.isEmpty,"reversed local evidence was incorrectly accepted")
+    }
+    ts.test("protected corridor geometry invariants") {
+      val origin = Point(53.0, 10.0, 0.0)
+      def metres(x:Double,y:Double) = Point(
+        origin.lat + math.toDegrees(y / EarthR),
+        origin.lon + math.toDegrees(x / (EarthR * math.cos(math.toRadians(origin.lat)))),
+        0.0
       )
+      def closeMeters(a:Double,b:Double,tol:Double=0.05):Unit =
+        assertT(math.abs(a-b) <= tol, f"$a%.4f != $b%.4f within $tol%.3f m")
 
-  def promotedProductRoute(classIndex: Int): HumanQualityRoute =
-    val endpointSeries =
-      selectedProductAssignment.endpointSeries(classIndex)
-    val endpointMode =
-      endpointSeries.endpointMode
-    val severity =
-      productClassSeverities(classIndex)
-    val reference =
-      referenceProductSelected(classIndex)
-    val rawFastest =
-      rawTerrainRouteForPromotion(endpointMode, severity)
-    val frontier =
-      exactPromotedComfortFrontierAtSeverity(
-        progressLabel = s"RIDER-C${classIndex + 1}",
-        maxSeverity = severity,
-        endpointMode = endpointMode,
-        rawFastest = rawFastest,
-        maxSlackSeconds = PromotionSearchSlackCeilingSeconds,
-        guardBaseline = reference
+      val corridor = Vector(metres(-20,0), metres(50,0))
+      val boundary = Vector(metres(0,12.1), metres(7.5,6), metres(15,6), metres(22.5,12.1))
+      val perpendicular = Vector(metres(10,-20), metres(10,20))
+      val oblique = Vector(metres(-2,-14), metres(26,14))
+      val forward = Vector(metres(0,0), metres(30,0))
+      val outside = Vector(metres(0,12.1), metres(30,12.1))
+      val inside = Vector(metres(0,11.9), metres(30,11.9))
+
+      assertT(continuousCoTravel(boundary,corridor,12.0) > 20.0,"boundary clipping lost in-tube travel")
+      assertT(continuousCoTravel(perpendicular,corridor,12.0) < 1e-6,"perpendicular crossing counted as co-travel")
+      assertT(continuousCoTravel(oblique,corridor,12.0) < 1e-6,"oblique crossing counted as co-travel")
+      assertT(continuousCoTravel(forward,corridor,12.0) > 29.0,"forward corridor travel not detected")
+      closeMeters(continuousCoTravel(forward,corridor,12.0),continuousCoTravel(forward.reverse,corridor,12.0))
+      assertT(continuousCoTravel(outside,corridor,12.0) < 1e-6,"outside parallel line counted")
+      assertT(continuousCoTravel(inside,corridor,12.0) > 29.0,"inside parallel line missed")
+
+      val splitForward = (0 to 6).map(i => metres(i * 5.0, 0)).toVector
+      val splitCorridor = Vector(metres(-20,0),metres(0,0),metres(15,0),metres(50,0))
+      closeMeters(continuousCoTravel(forward,corridor,12.0),continuousCoTravel(splitForward,corridor,12.0))
+      closeMeters(continuousCoTravel(forward,corridor,12.0),continuousCoTravel(forward,splitCorridor,12.0))
+
+      val blocker = coTravelBlockPoint(boundary,corridor,12.0,boundary.head,boundary.last)
+      assertT(blocker.nonEmpty,"hard co-travel did not produce a route-derived blocker")
+      assertT(math.min(haversine(blocker.get,boundary.head),haversine(blocker.get,boundary.last)) > 5.0,"blocker collapsed onto connector endpoint")
+
+      // Regression discovered while independently checking the historical
+      // matcher: OLD can turn an empty rectangle-band intersection into a
+      // non-empty interval by sorting (lo,hi) after max/min intersection.
+      // The corrected exact-capsule implementation must reject this shape.
+      val oldBugRoute = Vector(
+        metres(0,0), metres(10,-20), metres(-20,-50), metres(-15,-50), metres(-5,-70)
       )
-
-    val selected =
-      frontier
-        .filter(route => promotedWallActive(classIndex, route))
-        .filter(
-          _.candidateComfortSufferingSeconds <
-            reference.candidateComfortSufferingSeconds - 1e-9
-        )
-        .sortBy(route =>
-          (
-            route.transferSeconds,
-            route.candidateComfortSufferingSeconds,
-            route.roadStressSeconds,
-            route.climbShape.maxAscentM,
-            route.climbShape.upwardViolationM,
-            route.climbShape.roughnessM
-          )
-        )
-        .headOption
-        .getOrElse(
-          sys.error(
-            s"Rider-quality selection fail-closed for C${classIndex + 1}: no route satisfies the configured quality constraints."
-          )
-        )
-
-    require(
-      promotedMetricNoWorse(selected, reference),
-      s"Rider-quality selection regression: C${classIndex + 1} worsens a guarded rider metric."
-    )
-    require(
-      promotedWallActive(classIndex, selected),
-      s"Rider-quality selection regression: C${classIndex + 1} no longer requires its wall class."
-    )
-    require(
-      selected.candidateComfortSufferingSeconds <
-        reference.candidateComfortSufferingSeconds - 1e-9,
-      s"Rider-quality selection regression: C${classIndex + 1} does not satisfy the candHard requirement."
-    )
-
-    selected
-
-  val promotedProductSelected =
-    productClassSeverities.indices.map(promotedProductRoute).toVector
-
-
-  val productC1Selected = promotedProductSelected(0)
-  val productC2Selected = promotedProductSelected(1)
-  val productC3Selected = promotedProductSelected(2)
-
-  val productC1Route = productRouteToMultiLabel(productC1Selected)
-  val productC2Route = productRouteToMultiLabel(productC2Selected)
-  val productC3Route = productRouteToMultiLabel(productC3Selected)
-
-  val timingExactDoneNs = System.nanoTime()
-  println("[3/4  75.0%] Product set selected; reconstructing and auditing three rider GPXs.")
-
-  case class RiderProfileSpec(
-      label: String,
-      route: MultiLabelRoute,
-      recommended: Boolean,
-      gpxPath: Path,
-      wallSeverityCeiling: Double,
-      productRole: String
-  )
-
-  def endpointRoleText(series: EndpointRoleSeries): String =
-    if series.label.startsWith("P2P") then "P2P" else "LOOP"
-
-  val selectedClassEndpointSeries =
-    selectedProductAssignment.endpointSeries
-
-  val riderProfileSpecs =
-    Vector(
-      RiderProfileSpec(
-        label = "DAY-C1",
-        route = productC1Route,
-        recommended = true,
-        gpxPath = cfg.out,
-        wallSeverityCeiling = productC1Severity,
-        productRole = endpointRoleText(selectedClassEndpointSeries(0))
-      ),
-      RiderProfileSpec(
-        label = "DAY-C2",
-        route = productC2Route,
-        recommended = false,
-        gpxPath = wallC2GpxPath,
-        wallSeverityCeiling = productC2Severity,
-        productRole = endpointRoleText(selectedClassEndpointSeries(1))
-      ),
-      RiderProfileSpec(
-        label = "DAY-C3",
-        route = productC3Route,
-        recommended = false,
-        gpxPath = wallC3GpxPath,
-        wallSeverityCeiling = productC3Severity,
-        productRole = endpointRoleText(selectedClassEndpointSeries(2))
+      val oldBugCorridor = Vector(
+        metres(0,0), metres(-5,5), metres(15,0), metres(5,30), metres(25,60)
       )
-    )
-
-
-  def routeMatrix(route: MultiLabelRoute): Matrix =
-    route.connectors.zipWithIndex.foldLeft(matrix) {
-      case (current, (connector, 0)) =>
-        current.copy(startToTrail = current.startToTrail.updated(route.order.head, Some(connector)))
-      case (current, (connector, step)) if step < route.order.size =>
-        val from = route.order(step - 1)
-        val to = route.order(step)
-        current.copy(between = current.between.updated(from, current.between(from).updated(to, Some(connector))))
-      case (current, (connector, _)) =>
-        current.copy(trailToFinish = current.trailToFinish.updated(route.order.last, Some(connector)))
+      val correctedBugCase = continuousCoTravel(oldBugRoute,oldBugCorridor,12.0)
+      assertT(correctedBugCase < 1e-6,f"corrected matcher false-positive=$correctedBugCase%.3fm")
+    }
+    ts.test("corridor safety sampling canonicalizes raw segmentation") {
+      val origin = Point(53.0, 10.0, 0.0)
+      def metres(x:Double,y:Double) = Point(
+        origin.lat + math.toDegrees(y / EarthR),
+        origin.lon + math.toDegrees(x / (EarthR * math.cos(math.toRadians(origin.lat)))),
+        0.0
+      )
+      val corridor=Vector(metres(-20,0),metres(80,0))
+      val raw=Vector(metres(0,8),metres(60,8))
+      val alreadyDense=(0 to 6).map(i=>metres(i*10.0,8)).toVector
+      val a=continuousCoTravel(corridorSafetyGeometry(raw),corridor,12.0)
+      val b=continuousCoTravel(corridorSafetyGeometry(alreadyDense),corridor,12.0)
+      near(a,b,0.05)
+      assertT(a > 59.0,s"canonical safety sampling lost parallel co-travel: $a")
     }
 
-  case class ProfileWritten(
-      spec: RiderProfileSpec,
-      route: MultiLabelRoute,
-      gpxPath: Path,
-      transitions: Vector[Output.Transition],
-      outputPoints: Vector[Point],
-      rideTime: RideTimeEstimate,
-      audit: AuditResult
-  ):
-    def elapsedSeconds: Double =
-      rideTime.totalSeconds +
-        route.order.size *
-          2.0 *
-          cfg.trailPauseMin *
-          60.0
-
-    def totalDistanceKm: Double =
-      Geometry.pathLengthMeters(
-        outputPoints
-      ) /
-        1000.0
-
-    def transferAscentM: Double =
-      transitions.map(
-        _.connector.ascentM
-      ).sum
-
-    def selectedStartPoint: Point =
-      route.connectors.head.route.from
-
-    def selectedEndPoint: Point =
-      route.connectors.last.route.to
-
-    def roadStressSeconds: Double =
-      transitions.map(
-        t =>
-          connectorRoadStress(t.connector)
-      ).sum
-
-    def steepestTransition: Option[Output.Transition] =
-      transitions.sortBy(
-        t =>
-          -t.connector.maxGrade100Pct
-      ).headOption
-
-  def writeProfile(spec: RiderProfileSpec): ProfileWritten =
-    val route = spec.route
-    val candidateMatrix = routeMatrix(route)
-    val selectedStartPoint = route.connectors.headOption
-        .map(_.route.from)
-        .getOrElse(endpoint1)
-    val selectedEndPoint = route.connectors.lastOption
-        .map(_.route.to)
-        .getOrElse(endpoint1)
-    val selectedCfg =
-      cfg.copy(
-        start = selectedStartPoint,
-        startName =
-          endpointName(
-            selectedStartPoint
-          ),
-        finish = selectedEndPoint,
-        finishName = endpointName(selectedEndPoint)
-      )
-    val selectedFinish =
-      endpointTrail(
-        endpointNumber(
-          selectedEndPoint
-        ),
-        selectedEndPoint,
-        endpointName(selectedEndPoint)
-      )
-    val (outputPoints, transitions) =
-      Output.assemble(
-        selectedCfg,
-        trails,
-        endpointName(
-          selectedStartPoint
-        ),
-        selectedFinish,
-        candidateMatrix,
-        route.order
-      )
-    val connectorTimes = transitions.map { transition =>
-        val connector = transition.connector
-        val recomputed =
-          RidePhysics.estimate(
-            connector.route.points,
-            cfg,
-            downhillCapKph = None,
-            crrOverride = connector.effectiveCrr
-          )
-        recomputed
-      }
-    val selectedTrailTimes =
-      route.order.map { i =>
-          technicalTrailTimes(i)
-      }
-    val rideTime =
-      RidePhysics.combine(
-        connectorTimes ++
-          selectedTrailTimes
-      )
-    val audit =
-      Audit.run(
-        cfg = selectedCfg,
-        trails = trails,
-        forbiddenTransferTrails = forbiddenTransferTrails,
-        finish = selectedFinish,
-        order = route.order,
-        transitions = transitions,
-        outputPoints = outputPoints
-      )
-    val title = spec.label +
-        (
-          if spec.recommended then " — recommended"
-          else " — alternative"
-        )
-    val description = s"$title. " +
-        f"Terrain wall severity ceiling ${spec.wallSeverityCeiling}%.3f. " +
-        s"Endpoint role ${spec.productRole}. " +
-        s"${route.order.size} mandatory technical trails. " +
-        s"Moving ${Format.duration(rideTime.totalSeconds)}. " +
-        s"Downhill handling ${Format.duration(route.downhillHandlingSeconds)}. " +
-        s"Road stress ${Format.duration(route.roadStressSeconds)}. " +
-        s"Order: " +
-        (
-          Vector(
-            endpointName(selectedStartPoint)
-          ) ++
-            route.order.map(
-              i =>
-                trails(i).name
-            ) ++
-            Vector(endpointName(selectedEndPoint))
-        ).mkString(" -> ")
-    Gpx.write(spec.gpxPath, title, description, outputPoints)
-    ProfileWritten(
-      spec = spec,
-      route = route,
-      gpxPath = spec.gpxPath,
-      transitions = transitions,
-      outputPoints = outputPoints,
-      rideTime = rideTime,
-      audit = audit
-    )
-
-
-  val writtenProfiles = riderProfileSpecs.map(writeProfile)
-
-  val timingProfilesDoneNs = System.nanoTime()
-  println("[3/4 100.0%] Rider GPXs reconstructed and audited.")
-
-  val recommendedWritten =
-    writtenProfiles.find(
-      _.spec.recommended
-    ).getOrElse(sys.error("Recommended unique rider profile disappeared during reconstruction."))
-
-  // NON-DESTRUCTIVE OUTPUT OWNERSHIP:
-  // The planner writes the current declared output/report paths, but it never
-  // deletes stale, duplicate, historical, or audit-FAIL files. Historical
-  // suffixes remain in the input-exclusion set only so an old planner artifact
-  // cannot become a mandatory technical trail on a later run.
-
-  val automaticRecommendationAllowed =
-    recommendedWritten.audit.verdict != "FAIL"
-
-  def selectedNames(route: MultiLabelRoute): Vector[String] =
-    route.order.map { i =>
-        trails(i).name
+    ts.test("semantic connector duplicate is bit exact") {
+      def c(id:String,ele:Double)=Connector(id,"a","b",Profiles.head,Vector(Point(0,0,0),Point(0,0.001,ele)),Vector(Point(0,0,0),Point(0,0.001,ele)),10,Vector.empty,1,1,0.01,RiderMetrics.Empty,WallMetrics(0,0,0),.2,0,.2,Vector.empty,Vector.empty,Vector.empty)
+      val a=c("a",10.0000); val b=c("b",10.0004)
+      assertT(semanticKey(a)!=semanticKey(b),"nearby elevation was incorrectly rounded into semantic equality")
     }
-
-  def orderText(route: MultiLabelRoute): String =
-    (
-      Vector(
-        endpointName(route.connectors.head.route.from)
-      ) ++
-        selectedNames(
-          route
-        ) ++
-        Vector(endpointName(route.connectors.last.route.to))
-    ).mkString(" -> ")
-
-  def gpxFileName(path: Path): String =
-    path.getFileName.toString
-
-  def warningPriority(warning: String): Int =
-    val w = warning.toLowerCase
-    if w.contains("motorway") ||
-        w.contains("trunk") ||
-        w.contains("trace_attributes") ||
-        w.contains("trail overlap") ||
-        w.contains("point gap")
-    then
-      0
-    else if w.contains("primary-road") ||
-        w.contains("primary road")
-    then
-      1
-    else if w.contains("max sustained 100 m")
-    then
-      2
-    else if w.contains("long connector climb")
-    then
-      3
-    else
-      4
-
-  def watchOutLines(written: ProfileWritten, limit: Int): Vector[String] =
-    val sorted =
-      written.audit.warnings.sortBy(
-        warning =>
-          (warningPriority(warning), warning)
+    ts.test("reconstruction keeps canonical mandatory elevation at duplicate stitch") {
+      val mandatory=Trail("T",Vector(Point(0,0.001,42),Point(0,0.002,41)),DemandingMeasurements(0,1,0,1,false,0,1,false),RiderMetrics.Empty)
+      def conn(id:String,from:String,to:String,ps:Vector[Point])=Connector(id,from,to,Profiles.head,ps,ps,1,Vector.empty,0,0,0.01,RiderMetrics.Empty,WallMetrics(0,0,0),0,0,0,Vector.empty,Vector.empty,Vector.empty)
+      val enter=conn("e","START","T",Vector(Point(0,0,0),Point(0,0.001,99)))
+      val finish=conn("f","T","FINISH_LOOP",Vector(Point(0,0.002,77),Point(0,0.003,0)))
+      val route=RiderTerminal(Mode.LOOP,2,0,0,RiderMetrics.Empty,ClimbState.Empty,0,0,Vector(0),Vector(enter,finish),"r")
+      val out=reconstruct(route,Vector(mandatory))
+      assertT(countSubsequence(out,mandatory.points)==1,s"mandatory sequence count=${countSubsequence(out,mandatory.points)}")
+      assertT(out.count(p=>p.lat==0 && p.lon==0.001)==1,"duplicate entry coordinate remained")
+    }
+    ts.test("wall breakpoint sweep") {
+      val f=Vector(
+        RawTerminal(Mode.LOOP,.2,500,10,Vector(0),Vector(),"a"),
+        RawTerminal(Mode.LOOP,.3,300,10,Vector(0),Vector(),"b"),
+        RawTerminal(Mode.LOOP,.4,290,5,Vector(1),Vector(),"c")
       )
-    val visible = sorted.take(limit)
-    if visible.nonEmpty then
-      if sorted.size > limit then
-        visible :+
-          s"... ${sorted.size - limit} more warning(s); see day.debug.txt"
+      val b=breakpoints(f)
+      assertT(b.map(_.ceiling)==Vector(.2,.3,.4))
+    }
+    ts.test("endpoint assignment") {
+      def r(m:Mode,w:Double,t:Double,s:String)=RawTerminal(m,w,t,0,Vector(),Vector(),s)
+      val c=Vector(.2,.3,.4);val l=Vector(r(Mode.LOOP,.2,10,"l1"),r(Mode.LOOP,.3,9,"l2"),r(Mode.LOOP,.4,8,"l3"));val p=Vector(r(Mode.P2P,.2,20,"p1"),r(Mode.P2P,.3,15,"p2"),r(Mode.P2P,.4,5,"p3"))
+      chooseAssignment(c,l,p) match
+        case Some((_,a)) => assertT(a.p2pIndex==2)
+        case None => assertT(false,"assignment unexpectedly infeasible")
+    }
+    ts.test("incremental climb-shape update") {var c=ClimbState.Empty;c=c.add(99,0).add(88,1).add(10,2).add(20,3).add(15,4);near(c.maxAscent,20);near(c.upward,10);near(c.roughness,15)}
+    ts.test("audit rider recomputation preserves technical mandatory policy") {
+      val mandatoryPoints=syntheticLine(120,120,90)
+      val mandatoryRider=physics(mandatoryPoints,0.010,Some(TrailDownhillMaxKph))
+      val mandatory=Trail(
+        "T",mandatoryPoints,
+        DemandingMeasurements(0,1,0,1,false,0,1,false),
+        mandatoryRider
+      )
+      def conn(id:String,from:String,to:String)=
+        val ps=Vector(Point(53.0,10.0,100),Point(53.0,10.00001,100))
+        val rm=physics(ps,0.010)
+        Connector(
+          id,from,to,Profiles.head,
+          ps,ps,
+          1,Vector.empty,rm.duration,0,0.01,rm,WallMetrics(0,0,0),
+          0,0,0,Vector.empty,Vector.empty,Vector.empty
+        )
+      val enter=conn("e","START","T")
+      val finish=conn("f","T","FINISH_LOOP")
+      val stored=enter.rider.concat(mandatory.rider).concat(finish.rider)
+      val route=RiderTerminal(Mode.LOOP,0,0,0,stored,ClimbState.Empty,0,0,Vector(0),Vector(enter,finish),"r")
+      assertT(auditSameRider(recomputeRouteRider(route,Vector(mandatory)),stored))
+      assertT(!auditSameRider(physics(mandatoryPoints,0.010),mandatoryRider),"fixture must distinguish transfer vs technical downhill physics")
+    }
+    ts.test("exact no-horizon rider search + Pareto-knee final selector") {
+      val st=Streak.constant(1.0,false)
+      def rt(sig:String,t:Double,ch:Double)=
+        RiderTerminal(Mode.LOOP,t,0,.2,RiderMetrics(t,ch,0,0,st,st,st,0),ClimbState.Empty,0,0,Vector(),Vector(),sig)
+      val baseline=rt("baseline",10,10)
+
+      // Product selector contract: exact frontier, no detour window.  A large early
+      // comfort gain is the knee; an extreme final gain is not selected merely
+      // because it has the absolute minimum candHard.
+      val nearFast=rt("near",11,9.9)
+      val knee=rt("knee",20,6.0)
+      val comfortExtreme=rt("comfort-extreme",1010,5.0)
+      assertT(chooseFinal(Vector(nearFast,knee,comfortExtreme),baseline,0,Vector(.3,.4,.5)).signature=="knee")
+
+      // Search contract: prove the same no-horizon property inside riderDp itself,
+      // so a future fixed transfer ceiling cannot hide behind a correct post-selector.
+      val dm=DemandingMeasurements(0,1,0,1,false,0,1,false)
+      val trail=Trail("T",Vector(Point(53,10,100),Point(53,10.00001,100)),dm,RiderMetrics.Empty)
+      def c(id:String,from:String,to:String,duration:Double,candHard:Double)=
+        val ps=Vector(Point(53,10,100),Point(53,10.00001,100))
+        val rm=RiderMetrics(duration,candHard,0,0,Streak.constant(duration,false),Streak.constant(duration,false),Streak.constant(duration,false),0)
+        Connector(id,from,to,Profiles.head,ps,ps,duration,Vector.empty,0,0,0.01,rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty,Vector.empty,Vector.empty)
+      val start=c("slow-comfort","START","T",1010,5)
+      val finish=c("finish","T","FINISH_LOOP",0,0)
+      val front=riderDp(Mode.LOOP,.3,None,baseline,"selftest-no-horizon",Vector(trail),Map(("START","T")->Vector(start),("T","FINISH_LOOP")->Vector(finish)))
+      assertT(front.size==1)
+      assertT(front.head.transfer>=1000)
+      assertT(front.head.rider.candHard==5)
+    }
+    ts
+
+  def debugPathFromArgs(args:Array[String]):Path =
+    val idx=args.indexOf("--output")
+    if idx>=0 && idx+1<args.length then Paths.get(args(idx+1)).resolve("day.debug.txt")
+    else Paths.get("day.debug.txt")
+
+  def writeAlwaysDebug(path:Path,body:String,append:Boolean=false):Unit =
+    val result=Try {
+      val parent=path.toAbsolutePath.normalize.getParent
+      if parent != null then Files.createDirectories(parent)
+      if append then
+        Files.writeString(
+          path,body,StandardCharsets.UTF_8,
+          StandardOpenOption.CREATE,StandardOpenOption.APPEND
+        )
       else
-        visible
-    else
-      written.steepestTransition.toVector.map { transition =>
-        f"${transition.label}: max sustained 100 m uphill grade " +
-          f"${transition.connector.maxGrade100Pct}%.1f%%"
-      }
-
-  def steepestConnector100Pct(written: ProfileWritten): Double =
-    written.steepestTransition
-      .map(_.connector.maxGrade100Pct)
-      .getOrElse(0.0)
-
-  def humanReport(): String =
-    val sb = new StringBuilder
-    sb.append(
-      "MTB DAY PLAN\n" +
-        "============\n" +
-        s"Planner build: ${BuildInfo.id}\n\n" +
-        s"Mandatory technical GPXs: $trailCount.\n" +
-        s"Selected endpoint roles: ${riderProfileSpecs.map(spec => s"${spec.label} ${endpointName(spec.route.connectors.head.route.from)} -> ${endpointName(spec.route.connectors.last.route.to)}").mkString("; ")}.\n\n"
-    )
-    writtenProfiles.foreach { written =>
-      val role =
-        if written.spec.recommended && automaticRecommendationAllowed then
-          "RECOMMENDED"
-        else if written.audit.verdict == "FAIL" then
-          "DIAGNOSTIC — DO NOT RIDE"
-        else
-          "ALTERNATIVE"
-      sb.append(
-        s"${written.spec.label} — $role — ${gpxFileName(written.gpxPath)}\n" +
-          f"  ${written.totalDistanceKm}%.2f km | moving ${Format.duration(written.rideTime.totalSeconds)}%s | planned ${Format.duration(written.elapsedSeconds)}%s | transfer +${written.transferAscentM}%.0f m\n" +
-          s"  candHard ${Format.duration(written.route.candidateComfortSufferingSeconds)} | road ${Format.duration(written.roadStressSeconds)} | " +
-          f"max100 ${steepestConnector100Pct(written)}%.1f%% | audit ${written.audit.verdict}\n" +
-          s"  ${endpointName(written.selectedStartPoint)} -> ${endpointName(written.selectedEndPoint)}\n" +
-          s"  ${orderText(written.route)}\n"
-      )
-      watchOutLines(
-        written,
-        4
-      ).foreach { warning =>
-          sb.append(s"  WATCH: $warning\n")
-      }
-      sb.append("\n")
+        Files.writeString(
+          path,body,StandardCharsets.UTF_8,
+          StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING
+        )
     }
-    if recommendedWritten.audit.verdict == "FAIL" then
-      sb.append("!!! RECOMMENDED AUDIT FAIL — DO NOT RIDE UNTIL DEBUGGED. !!!\n\n")
-    else if recommendedWritten.audit.verdict == "WARN" then
-      sb.append("Recommended route audit is WARN; review WATCH lines above and day.debug.txt before riding.\n\n")
-    else
-      sb.append("Recommended route audit: PASS.\n\n")
-    sb.append(
-      "FILES\n" +
-        "-----\n" +
-        s"C1 day variant: ${gpxFileName(writtenProfiles(0).gpxPath)}\n" +
-        s"C2 day variant: ${gpxFileName(writtenProfiles(1).gpxPath)}\n" +
-        s"C3 day variant: ${gpxFileName(writtenProfiles(2).gpxPath)}\n" +
-        s"Diagnostics: ${debugPath.getFileName}\n"
-    )
-    sb.result()
-
-  def debugReport(): String =
-    val sb = new StringBuilder
-    val finalAvoidFailures = writtenProfiles.flatMap(_.audit.failures).count(_.contains("forbidden transfer corridor"))
-    val finalAvoidWarnings = writtenProfiles.flatMap(_.audit.warnings).count(_.contains("forbidden transfer corridor"))
-
-    def orderNames(order: Vector[Int]): String =
-      order.map(i => trails(i).name).mkString(" -> ")
-
-    def productLine(spec: RiderProfileSpec): String =
-      val q = ProductRideQuality(
-        maxCountedAscentM = spec.route.climbShape.maxAscentM,
-        upwardViolationM = spec.route.climbShape.upwardViolationM,
-        roughnessM = spec.route.climbShape.roughnessM,
-        totalCountedAscentM = spec.route.climbShape.totalAscentM,
-        roadStressSeconds = spec.route.roadStressSeconds,
-        candidateComfortSufferingSeconds =
-          spec.route.candidateComfortSufferingSeconds,
-        downhillHandlingSeconds = spec.route.downhillHandlingSeconds,
-        pathPenaltySeconds = spec.route.pathBurdenSeconds
-      )
-      f"${spec.label}%-6s | ${spec.productRole}%-4s | wall<=${spec.wallSeverityCeiling}%.6f | " +
-        f"transfer=${Format.duration(selectedTransferSeconds(spec.route))}%s | maxA=${q.maxCountedAscentM}%.0f m | " +
-        f"up=${q.upwardViolationM}%.0f m | rough=${q.roughnessM}%.0f | road=${Format.duration(q.roadStressSeconds)}%s | " +
-        f"candHard=${Format.duration(q.candidateComfortSufferingSeconds)}%s | order: ${orderNames(spec.route.order)}"
-
-    sb.append(
-      "MTB CANONICAL RUN\n" +
-        "=================\n\n" +
-        s"Planner build: ${BuildInfo.id}\n" +
-        s"Valhalla: $fingerprint\n" +
-        s"Mandatory GPXs: $trailCount\n" +
-        s"State masks: $stateCount\n" +
-        s"Routing profiles: ${RouteSearchProfiles.all.size}\n\n"
-    )
-
-    sb.append(
-      "INPUT / AUDIT SNAPSHOT\n" +
-        "----------------------\n" +
-        s"Mandatory technical GPX: ${trails.size}.\n" +
-        s"Avoid GPX: ${forbiddenTransferTrails.size}.\n" +
-        s"Real-ride GPX: ${realRides.size}.\n" +
-        s"Final avoid failures: $finalAvoidFailures; junction warnings: $finalAvoidWarnings.\n" +
-        s"Real-ride evidence records: ${productionRealRideWallEvidence.size}.\n\n"
-    )
-
-    sb.append(
-      "ROUTES\n" +
-        "------\n" +
-        riderProfileSpecs.map(productLine).mkString("\n") +
-        "\n\n"
-    )
-
-    sb.append(
-      "ENDPOINT ASSIGNMENT\n" +
-        "-------------------\n" +
-        s"Class severities: ${productClassSeverities.map(s => f"$s%.6f").mkString(" < ")}.\n" +
-        s"Feasible endpoint assignments: ${feasibleProductAssignments.size}; " +
-        s"selected P2P class=C${selectedProductAssignment.p2pClassOneBased}.\n"
-    )
-    productClassSeverities.indices.foreach { i =>
-      val endpointSeries = selectedProductAssignment.endpointSeries(i)
-      sb.append(
-        f"  C${i + 1}%d wall<=${productClassSeverities(i)}%.6f -> ${endpointRoleText(endpointSeries)}%-4s | ${endpointSeries.endpointMode.text}\n"
+    result.failed.foreach { e =>
+      System.err.println(
+        s"ERROR: could not write debug ${path.toAbsolutePath}: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
       )
     }
-    sb.append("\n")
 
-    sb.append(
-      "RAW CLASS x ENDPOINT EVIDENCE MATRIX\n" +
-        "------------------------------------\n"
+
+  def appendLiveDebug(line:String):Unit = this.synchronized {
+    val now=System.nanoTime()
+    val elapsed=(now-LiveDebugStartNanos)/1e9
+    val delta=(now-LiveDebugLastNanos)/1e9
+    LiveDebugLastNanos=now
+    val prefix=f"[${Instant.now()} +$elapsed%.3fs Δ$delta%.3fs] "
+    writeAlwaysDebug(LiveDebugPath, prefix + line + "\n", append=true)
+  }
+
+  def resetLiveDebug(args:Array[String]):Unit = this.synchronized {
+    LiveDebugPath=debugPathFromArgs(args)
+    LiveDebugStartNanos=System.nanoTime()
+    LiveDebugLastNanos=LiveDebugStartNanos
+    writeAlwaysDebug(
+      LiveDebugPath,
+      s"Build id: $BuildId\nArgs: ${args.mkString(" ")}\nExecution status: RUNNING\n"
     )
-    productClassSeverities.zipWithIndex.foreach { case(severity,classIndex) =>
-      Vector(loopEndpointRole,p2pEndpointRole).foreach { endpointSeries =>
-        val mode = endpointRoleText(endpointSeries)
-        rawTerrainRouteAtSeverity(endpointSeries.endpointMode,severity) match
-          case None =>
-            sb.append(
-              f"  C${classIndex + 1}%d $mode%-4s wall<=${severity}%.9f UNREACHABLE\n"
-            )
-          case Some(route) =>
-            sb.append(
-              f"  C${classIndex + 1}%d $mode%-4s wall<=${severity}%.9f transfer=${route.transferSeconds}%.3f " +
-                f"road=${route.connectors.map(connectorRoadStress).sum}%.3f usedWall=${route.maxUsedSeverity}%.9f order=${orderNames(route.order)}\n"
-            )
-            route.connectors.zipWithIndex.foreach { case(connector,connectorIndex) =>
-              val evidenceFloor = realRideWallSeverityFloor(connector)
-              val transitionLabel =
-                if connectorIndex == 0 then
-                  s"START->${trails(route.order.head).name}"
-                else if connectorIndex == route.connectors.size - 1 then
-                  s"${trails(route.order.last).name}->FINISH_$mode"
-                else
-                  s"${trails(route.order(connectorIndex - 1)).name}->${trails(route.order(connectorIndex)).name}"
-              sb.append(
-                f"    $transitionLabel profile=v${connector.routingSpeedKph}%.0f-h${connector.routingUseHills}%.2f-r${connector.routingUseRoads}%.2f " +
-                  f"distance=${connector.route.lengthKm * 1000.0}%.1f transfer=${connector.physicsSeconds}%.3f " +
-                  f"road=${connectorRoadStress(connector)}%.3f wall=${effectiveConnectorWallSeverity(connector)}%.9f " +
-                  f"physical=${connectorWallSeverity(connector)}%.9f evidence=${evidenceFloor}%.9f " +
-                  f"max30=${connector.maxGrade30Pct}%.3f max100=${connector.maxGrade100Pct}%.3f " +
-                  f"p180=${connector.longestPowerStreakSecondsByThreshold.getOrElse(PowerPolicy.SafetyWallPowerW,0.0)}%.3f " +
-                  f"ascent=${connector.ascentM}%.1f crr=${connector.effectiveCrr}%.5f\n"
-              )
-            }
-      }
-    }
-    sb.append("END RAW CLASS x ENDPOINT EVIDENCE MATRIX\n\n")
+  }
 
-    sb.append(
-      "POWER METRICS\n" +
-        "-------------\n" +
-        s"candHard thresholds: ${PowerPolicy.candidateComfortThresholdsW(cfg.riderPowerW).mkString("/", "/", " W")}.\n" +
-        s"streak thresholds: ${PowerPolicy.candidateStopStreakThresholdsW(cfg.riderPowerW).mkString("/", "/", " W")}.\n" +
-        f"spike base/scale: ${PowerPolicy.candidateSpikeBaseW(cfg.riderPowerW)}%.0f/${PowerPolicy.candidateSpikeScaleW(cfg.riderPowerW)}%.0f W.\n" +
-        s"hard-safety streak: ${PowerPolicy.SafetyWallPowerW} W/${PowerPolicy.SafetyWallMinStreakSeconds.toInt} s.\n\n"
-    )
+  def throwableText(e:Throwable):String =
+    val sw = new StringWriter()
+    val pw = new PrintWriter(sw)
+    e.printStackTrace(pw)
+    pw.flush()
+    sw.toString
 
-    sb.append(
-      "REAL-RIDE EVIDENCE\n" +
-        "------------------\n" +
-        s"Evidence records: ${productionRealRideWallEvidence.size}.\n" +
-        s"Connector variants with applied evidence floor: ${realRideWallSeverityFloorByConnector.size()}.\n\n"
-    )
+  def selfTestDebug(ts:TestState,args:Array[String]):String =
+    val b = new StringBuilder
+    b.append(s"Build id: $BuildId\n")
+    b.append("Invocation: self-test\n")
+    b.append(s"Args: ${args.mkString(" ")}\n")
+    ts.lines.foreach(x => b.append(x).append("\n"))
+    b.append(s"SELF-TESTS: ${ts.passed} passed, ${ts.failed} failed\n")
+    if ts.failures.nonEmpty then
+      b.append("Failures:\n")
+      ts.failures.foreach(x => b.append("  ").append(x).append("\n"))
+    b.toString
 
-    sb.append(
-      "FINAL RIDER AUDITS\n" +
-        "------------------\n"
-    )
-    writtenProfiles.foreach { written =>
-      sb.append(
-        s"\n${written.spec.label}: ${written.audit.verdict}\n" +
-          s"GPX: ${gpxFileName(written.gpxPath)}\n" +
-          s"Order: ${orderText(written.route)}\n" +
-          s"Audit failures: ${written.audit.failures.size}; warnings: ${written.audit.warnings.size}\n"
-      )
-      written.audit.failures.foreach(failure => sb.append(s"FAIL: $failure\n"))
-      written.audit.warnings.take(30).foreach(warning => sb.append(s"WARN: $warning\n"))
-      if written.audit.warnings.size > 30 then
-        sb.append(s"... ${written.audit.warnings.size - 30} more warning(s) omitted from compact debug.\n")
-    }
+  val Usage: String =
+    s"""MTB route planner — $BuildId
+      |Usage:
+      |  ./trail-plan.scala --input DIR --output DIR --valhalla-url URL
+      |  ./trail-plan.scala --input DIR --output DIR --valhalla-url URL --no-test
+      |  ./trail-plan.scala --help
+      |
+      |Tests run by default before production routing. Use --no-test to skip them.
+      |""".stripMargin
 
-    sb.append(
-      "\nOLD ROUTE-DERIVED BLOCKER EVIDENCE\n" +
-        "-----------------------------------\n"
-    )
-    val blockerEvidence = DifferentialEvidence.snapshot
-    if blockerEvidence.isEmpty then sb.append("No targeted blocker evidence captured.\n")
-    else blockerEvidence.foreach(line => sb.append(line).append("\n"))
+  def main(args:Array[String]):Unit =
+    val debugPath=debugPathFromArgs(args)
+    resetLiveDebug(args)
 
-    sb.append(
-      "\nTIMING\n" +
-        "------\n" +
-        f"startup + connector matrix: ${timingSeconds(timingRunStartedNs, timingMatrixReadyNs)}%.2f s\n" +
-        f"matrix -> terrain frontier ready: ${timingSeconds(timingMatrixReadyNs, timingTerrainFrontierDoneNs)}%.2f s\n" +
-        f"terrain frontier -> terrain product classes ready: ${timingSeconds(timingTerrainFrontierDoneNs, timingTerrainProductClassesDoneNs)}%.2f s\n" +
-        f"terrain classes -> rider set selected: ${timingSeconds(timingTerrainProductClassesDoneNs, timingExactDoneNs)}%.2f s\n" +
-        f"reconstruct + final audits: ${timingSeconds(timingExactDoneNs, timingProfilesDoneNs)}%.2f s\n" +
-        f"total to completed rider profiles: ${timingSeconds(timingRunStartedNs, timingProfilesDoneNs)}%.2f s\n" +
-        "Report/debug writing is excluded from the rider-profile total.\n"
-    )
+    parseCli(args) match
+      case Left(problem) =>
+        val line=s"ERROR: $problem"
+        System.err.println(line)
+        writeAlwaysDebug(debugPath,s"Execution status: FAIL\n$line\n",append=true)
+        sys.exit(1)
 
-    sb.result()
+      case Right(cli) if cli.help =>
+        println(Usage)
+        writeAlwaysDebug(
+          debugPath,
+          s"Build id: $BuildId\nInvocation: help\nArgs: ${args.mkString(" ")}\nSTATUS: PASS\n"
+        )
 
-  val reportText = humanReport()
-  val debugText = debugReport()
-  writeText(baseReportPath, reportText)
-  writeText(debugPath, debugText)
-  println(
-    s"DONE: ${recommendedWritten.spec.label} audit=${recommendedWritten.audit.verdict}; " +
-      f"runtime=${timingSeconds(timingRunStartedNs, System.nanoTime())}%.2f s; " +
-      s"GPX=${gpxFileName(recommendedWritten.gpxPath)}; report=${baseReportPath.getFileName}; debug=${debugPath.getFileName}"
-  )
+      case Right(cli) =>
+        (cli.input,cli.output,cli.valhallaUrl) match
+          case (Some(input),Some(output),Some(url)) =>
+            val testsOpt=
+              if cli.runTests then
+                val tests=runSelfTests(Some(input))
+                val summary=s"SELF-TESTS: ${tests.passed} passed, ${tests.failed} failed"
+                tests.lines.foreach(println)
+                println(summary)
+                appendLiveDebug(summary)
+                if tests.failed > 0 then
+                  val line="ERROR: default self-tests failed; production routing was not started"
+                  System.err.println(line)
+                  writeAlwaysDebug(debugPath,selfTestDebug(tests,args)+line+"\n",append=true)
+                  sys.exit(2)
+                Some(tests)
+              else
+                appendLiveDebug("SELF-TESTS: skipped by --no-test")
+                None
 
-  if recommendedWritten.audit.verdict == "FAIL"
-  then Console.err.println("WARNING: recommended profile audit FAIL. Do not ride before inspecting the debug report.")
+            runProduction(input,output,url) match
+              case Left(problem) =>
+                val line=s"ERROR: $problem"
+                System.err.println(line)
+                writeAlwaysDebug(debugPath,s"Execution status: FAIL\n$line\n",append=true)
+                sys.exit(1)
+
+              case Right(result) =>
+                val testText=testsOpt.map(t=>s" tests=${t.passed}/${t.passed+t.failed}").getOrElse(" tests=SKIPPED")
+                val line=
+                  s"build=$BuildId demanding=${result.demanding.mkString(",")} classes=${result.classes.mkString(",")} modes=${result.assignment.modes.mkString(",")} audits=${result.audits.map(_.status).mkString(",")}$testText"
+                println(line)
+                writeAlwaysDebug(debugPath,s"Execution status: PASS\n$line\n",append=true)
+
+          case _ =>
+            val missing=Vector(
+              if cli.input.isEmpty then Some("--input DIR") else None,
+              if cli.output.isEmpty then Some("--output DIR") else None,
+              if cli.valhallaUrl.isEmpty then Some("--valhalla-url URL") else None
+            ).flatten.mkString(", ")
+            val line=s"ERROR: missing required arguments: $missing"
+            System.err.println(line)
+            writeAlwaysDebug(debugPath,s"Execution status: FAIL\n$line\n",append=true)
+            sys.exit(1)
