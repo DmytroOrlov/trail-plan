@@ -12,6 +12,8 @@ When this file conflicts with an explicit current user requirement, the user req
 
 ## Production shape
 
+The single-file production shape is established; see System shape in `docs/ARCHITECTURE.md`.
+
 The current production pipeline, Valhalla boundary, representation ownership, and independent final-audit boundary are established; see `docs/ARCHITECTURE.md`.
 
 ---
@@ -58,13 +60,15 @@ The bug/regression workflow, change discipline, and definition of done are owned
 
 # Closed / rejected directions
 
-The following ideas have already been investigated or rejected and must not be reintroduced without new evidence.
+The following ideas have already been investigated or rejected and are not part of the current design.
+
+Reopening any of them is governed by `Reopening an established decision`.
 
 ## Family-based mandatory semantics
 
 Rejected.
 
-Mandatory GPXs are independent requirements and are not grouped into interchangeable families.
+Mandatory GPXs are not grouped into interchangeable families; the independence requirement is owned by `PC-MAND-01`.
 
 ---
 
@@ -72,7 +76,7 @@ Mandatory GPXs are independent requirements and are not grouped into interchange
 
 Rejected for the current product contract.
 
-Do not replace exact DP/search with beam search, top-K, epsilon dominance, arbitrary detour cutoffs, or equivalent approximations.
+The exactness requirements and prohibited approximation classes are defined by `PC-SEARCH-01` and `PC-SEARCH-02`.
 
 ---
 
@@ -80,7 +84,7 @@ Do not replace exact DP/search with beam search, top-K, epsilon dominance, arbit
 
 Rejected as a general production shortcut.
 
-Do not impose a fixed horizon that can remove an otherwise valid exact solution.
+The no-fixed-horizon guarantee is defined by `PC-SEARCH-02`.
 
 ---
 
@@ -88,7 +92,7 @@ Do not impose a fixed horizon that can remove an otherwise valid exact solution.
 
 A transition being unusable for one profile is not established evidence that it may be skipped for another profile.
 
-Do not introduce cross-profile pruning from such an assumption without new proof.
+Do not introduce cross-profile pruning from such an assumption.
 
 ---
 

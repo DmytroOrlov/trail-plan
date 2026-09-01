@@ -2,11 +2,7 @@
 
 # Trail Plan
 
-Production code lives in one file:
-
-`trail-plan.scala`
-
-Keep it that way unless the user explicitly changes this constraint.
+Preserve the single-file production shape defined in `docs/ARCHITECTURE.md` unless the user explicitly changes that constraint.
 
 ## Before changing code
 
@@ -73,6 +69,6 @@ A change is done when:
 * every newly established invariant has regression protection;
 * relevant tests pass;
 * temporary investigation code is removed;
-* documentation reflects any changed established truth.
+* documentation and `docs/TEST_MATRIX.md` traceability reflect any changed established truth or test behavior.
 
 Compilation alone is not sufficient.

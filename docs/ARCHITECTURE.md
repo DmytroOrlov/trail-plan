@@ -73,7 +73,7 @@ The important architectural boundary is between **connector construction**, **ex
 
 Mandatory GPXs are canonical trail data and participate in the solver graph.
 
-Their supplied point sequence and elevation are preserved for final reconstruction.
+Their supplied point sequence and elevation are preserved for final reconstruction (`PC-MAND-04`).
 
 Canonical mandatory elevation comes from supplied GPX `<ele>`.
 
@@ -122,7 +122,7 @@ Never replace `geometry` with `traceGeometry` for reconstruction or wall/physics
 
 Mandatory and avoid GPXs are both represented as `ProtectedCorridor`s during connector construction.
 
-Protected-corridor policy is evaluated on a canonical safety representation produced from `/route` geometry by segment-wise resampling to at most 10 m.
+Protected-corridor policy (`PC-PROT-*`) is evaluated on a canonical safety representation produced from `/route` geometry by segment-wise resampling to at most 10 m.
 
 Continuous co-travel is measured geometrically against the protected corridor tube. It is not endpoint-only and must not depend on arbitrary raw Valhalla vertex spacing.
 
@@ -160,11 +160,19 @@ After elevation and all connector metrics are built, protected-corridor overlap 
 
 Road safety uses `EdgeAttr` plus `traceGeometry`.
 
-Hard-invalid road/use/surface conditions are rejected during connector construction. Missing data required to establish road safety also fails closed.
+Hard-invalid road/use/surface conditions (`PC-ROAD-01`) are rejected during connector construction. Missing data required to establish road safety also fails closed (`PC-SAFE-01`).
 
-Finite road exposure that belongs to the scored road policy remains a cost (`roadStressSeconds`) rather than being converted into a new hard graph deletion.
+Finite road exposure that belongs to the scored road policy (`PC-ROAD-02`) remains a cost (`roadStressSeconds`) rather than being converted into a new hard graph deletion.
 
 This distinction matters: **hard safety determines connector existence; scored exposure participates in dominance and route quality**.
+
+## Transfer rider physics
+
+Modeled transfer duration and rider metrics are computed from connector `geometry` in ~30 m grade chunks; a trailing chunk shorter than half the window is merged into the previous chunk.
+
+Downhill chunks coast when gravity can sustain practical speed and contribute zero rider power. Mandatory technical descents apply the `PC-RIDER-01` cap within the same physics. Exact 30 m / 100 m wall grades (`PC-WALL-01`, `PC-WALL-02`) are evaluated independently of this chunking.
+
+Power-streak metrics concatenate across component boundaries: prefix, suffix, and cross-boundary durations merge so that a streak continuing across a chunk or component boundary is measured as one continuous streak.
 
 ## Real-ride evidence
 
@@ -183,7 +191,7 @@ real-ride evidence floor
 
 `effectiveWall` is the wall value seen by connector pruning and route search.
 
-Evidence is safety-active: if the resulting effective wall reaches the hard envelope, the connector is rejected.
+Evidence is safety-active (`PC-EVID-01`): if the resulting effective wall reaches the hard envelope, the connector is rejected.
 
 ## Connector graph
 
@@ -209,7 +217,7 @@ Changing the production profile cover changes the connector graph search space a
 
 ## RAW search
 
-RAW search is an exact DP over the connector graph it receives.
+RAW search is an exact DP over the connector graph it receives (`PC-SEARCH-01`).
 
 Its primary continuation state is:
 
@@ -240,9 +248,9 @@ Its continuation state includes more than `(mask, last)`. In particular, climb-h
 
 Dominance is only performed inside equivalent future-continuation states.
 
-The search has no fixed time horizon.
+The search has no fixed time horizon (`PC-SEARCH-02`).
 
-Pruning against the RAW baseline is allowed only for resources whose future contribution is monotone and which therefore can no longer recover into an eligible upgrade. This is admissible pruning, not beam/top-K/epsilon approximation.
+Pruning against the RAW baseline is allowed only for resources whose future contribution is monotone and which therefore can no longer recover into an eligible upgrade. This is the admissible pruning permitted by `PC-SEARCH-02`, not beam/top-K/epsilon approximation.
 
 ## Post-search selection
 
@@ -281,7 +289,7 @@ finish connector.geometry
 
 At connector/mandatory stitch points, canonical mandatory GPX geometry and elevation win.
 
-Reconstruction must not replace or resample the supplied mandatory point sequence.
+Reconstruction must not replace or resample the supplied mandatory point sequence (`PC-MAND-04`, `PC-RECON-01`).
 
 ## Independent final audit
 
@@ -299,15 +307,15 @@ It independently checks/recomputes, among other things:
 - real-ride evidence and effective wall;
 - protected-corridor overlap;
 - wall-class compliance;
-- reconstructed GPX gaps.
+- reconstructed GPX gaps (`PC-GAP-01`).
 
-Hard audit failures prevent successful production output.
+Hard audit failures prevent successful production output (`PC-AUDIT-01`).
 
 The audit should remain independent enough to detect disagreement between search state, connector metadata, and reconstructed output.
 
 ## Execution and observability
 
-Default CLI execution runs the in-file contract/regression suite before production routing unless `--no-test` is explicitly supplied.
+Default CLI execution runs the contract/regression suite before production routing (`PC-CLI-01`); the suite is defined and executed in-file.
 
 Production execution records live and structured diagnostics in `day.debug.txt`, including graph construction, rejections, RAW frontiers, wall classes, endpoint assignment, rider search and final audits.
 
