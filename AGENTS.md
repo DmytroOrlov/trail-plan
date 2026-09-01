@@ -24,7 +24,9 @@ Current repository contracts override historical comments and old experiments.
 
 * Make the smallest change that solves the established problem.
 * Do not invent new domain semantics or architecture without evidence.
-* Preserve the established product, safety, search, and canonical-data semantics recorded in `docs/CURRENT_STATE.md`.
+* Preserve the established contracts and architecture referenced by `docs/CURRENT_STATE.md`.
+* Do not make a route succeed by weakening an established product or safety contract.
+* Performance work must preserve the problem being solved.
 * Prefer removing a disproven heuristic over compensating for it with another heuristic.
 
 For a bug:
@@ -37,17 +39,13 @@ For a bug:
 6. run relevant tests and inspect resulting evidence;
 7. remove temporary diagnostics/experiments.
 
+Do not wait for a separate user request to add regression protection for an established invariant.
+
 A successful single route is not proof of correctness.
 
 ## Architecture changes
 
-Do not reopen an established architectural decision merely because another design looks cleaner.
-
-Reconsider it only when:
-
-* the product requirement changed;
-* a reproducible counterexample shows it is wrong; or
-* an assumption behind it was proven false.
+Do not reopen an established architectural decision merely because another design looks cleaner. The conditions that permit reopening are recorded in `docs/CURRENT_STATE.md` (Reopening an established decision).
 
 Record established current truth in repository documentation, not only in chat or source-history comments.
 

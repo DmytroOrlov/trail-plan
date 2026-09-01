@@ -18,28 +18,15 @@ The current production pipeline, Valhalla boundary, representation ownership, an
 
 ## Established product semantics
 
-The following are established and must not be changed accidentally:
+The mandatory-trail, demanding-trail, and protected-corridor contracts are established; see `PC-MAND-*`, `PC-DEMAND-*`, and `PC-PROT-*` in `PRODUCT_CONTRACT.md`.
 
-* Every supplied mandatory technical GPX is independently mandatory.
-* Every mandatory technical GPX must be traversed exactly once.
-* Every mandatory technical GPX must be traversed in its supplied direction.
-* Mandatory trails are not interchangeable.
-* `family` / `family_id` semantics are not part of the product model.
-* Mandatory and avoid GPXs are protected from reuse as ordinary transfer corridors.
-* Routing failure must not be solved by silently weakening established safety or product contracts.
-
-Detailed normative requirements belong in `PRODUCT_CONTRACT.md`.
+`family` / `family_id` semantics are not part of the product model; see Family-based mandatory semantics under Closed / rejected directions.
 
 ---
 
 ## Established search semantics
 
-* RAW ordering is exact on the connector graph it receives.
-* Rider ordering remains exact on the graph/state space defined by the production algorithm.
-* Approximate search mechanisms are not part of the current architecture.
-* Fixed arbitrary search horizons, beam search, top-K pruning, epsilon pruning, or equivalent shortcuts must not be introduced without a product-level decision.
-
-Search performance improvements must preserve the problem being solved.
+The exact RAW and rider-quality search contracts are established; see `PC-SEARCH-01` and `PC-SEARCH-02` in `PRODUCT_CONTRACT.md`. Approximate search mechanisms remain rejected; see Approximate ordering/search and Fixed rider-search horizon under Closed / rejected directions.
 
 ---
 
@@ -51,44 +38,21 @@ Canonical data/geometry ownership, distinct route/trace index spaces, and canoni
 
 ## Established safety behavior
 
-The following safety mechanisms are currently part of production behavior:
+The hard-safety, road-policy, and real-ride-evidence contracts are established; see `PC-SAFE-*`, `PC-WALL-*`, `PC-ROAD-*`, and `PC-EVID-*` in `PRODUCT_CONTRACT.md`.
 
-* protected-corridor exclusion;
-* wall constraints;
-* road-safety classification;
-* real-ride evidence;
-* required elevation/data inputs fail closed where absence would invalidate safety reasoning;
-* final route auditing is independent from the search decision that produced the route.
-
-Do not weaken these mechanisms merely to make a candidate route feasible.
-
-Exact thresholds and detailed semantics belong in code, tests, `PRODUCT_CONTRACT.md`, or `docs/ARCHITECTURE.md` rather than this snapshot.
+The independent final-audit boundary is established; see `docs/ARCHITECTURE.md`.
 
 ---
 
 ## Established selection behavior
 
-The current production selector uses a **local marginal-drop** criterion.
-
-The previously used global-extrema-normalized knee was removed because adding an irrelevant distant alternative could change the selected result.
-
-Selection should remain stable under irrelevant extension of the alternative set where that property is covered by the regression suite.
+The current production selector is established; see Post-search selection in `docs/ARCHITECTURE.md`. The selector-stability requirement is defined by `PC-SELECT-01` in `PRODUCT_CONTRACT.md`. The global-extrema-normalized knee is rejected; see Global-extrema-normalized selector knee under Closed / rejected directions.
 
 ---
 
 ## Established engineering discipline
 
-A reproduced defect that establishes a permanent product or architecture invariant must result in regression protection.
-
-The user does not need to separately request such a test.
-
-The expected loop is:
-
-`reproduce → establish cause → identify invariant → add regression → make minimal fix → verify`
-
-Temporary diagnostics and experimental production logic should be removed once the investigation is concluded.
-
-A single successful route is evidence, not proof of correctness.
+The bug/regression workflow, change discipline, and definition of done are owned by `../AGENTS.md`.
 
 ---
 
