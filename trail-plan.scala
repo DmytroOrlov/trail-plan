@@ -325,9 +325,7 @@ object MtbRoutePlanner:
       physicalWall: Double,
       evidenceFloor: Double,
       effectiveWall: Double,
-      evidence: Vector[EvidenceApplication],
-      avoidWarnings: Vector[(String, Double)],
-      safetyProvenance: Vector[String]
+      evidence: Vector[EvidenceApplication]
   )
 
   enum Mode:
@@ -1983,22 +1981,6 @@ object MtbRoutePlanner:
                               diag.safetyBlockedProfiles += 1
                               return Right(None)
 
-                            val warnings=finalOverlaps.collect {
-                              case(c,m) if m>0.0 && m<=AvoidToleranceM => c.label -> m
-                            }
-                            val provenance=
-                              Vector(
-                                s"route profile=${profile.id}",
-                                s"route-derived blockers=${avoidLocations.size}",
-                                s"processed-route-spacing=10m-segmentwise-reference",
-                                s"physicalWall=$physical",
-                                s"evidenceFloor=$floor"
-                              ) ++
-                                apps.flatMap(
-                                  a => Vector(s"real-ride ${a.corridor} severity=${a.severity}") ++ a.details
-                                )
-
-
                             diag.acceptedVariants += 1
                             return Right(
                               Some(
@@ -2006,7 +1988,7 @@ object MtbRoutePlanner:
                                   s"$fromKey->$toKey@${profile.id}",
                                   fromKey,toKey,profile,geometry,traceGeometry,rawSeconds,edges,
                                   stress,ascent(geometry),crr,rider,wall,
-                                  physical,floor,effective,apps,warnings,provenance
+                                  physical,floor,effective,apps
                                 )
                               )
                             )
@@ -2953,8 +2935,7 @@ object MtbRoutePlanner:
     )
     b.result()
 
-  val ProductionFiles:Set[String] =
-    Set("day.gpx","day.wall-c2.gpx","day.wall-c3.gpx","day.txt","day.debug.txt")
+  val ProductionFiles:Set[String] = OutputFileSet.toSet
 
   @volatile var LiveDebugPath:Path=Paths.get("day.debug.txt")
   @volatile var LiveDebugStartNanos:Long=System.nanoTime()
@@ -2980,7 +2961,12 @@ object MtbRoutePlanner:
     else Left(s"missing production outputs: ${missing.toVector.sorted.mkString(", ")}")
 
 
-  case class RunResult(classes:Vector[Double],assignment:Assignment,finals:Vector[RiderTerminal],audits:Vector[AuditResult],demanding:Vector[String],diag:Diagnostics,valhallaStatus:String,breaks:Vector[Breakpoint],allAssignments:Vector[Assignment],baselines:Vector[RiderTerminal])
+  case class RunResult(
+      classes:Vector[Double],
+      assignment:Assignment,
+      audits:Vector[AuditResult],
+      demanding:Vector[String]
+  )
 
   def runRiderClasses(
       classes:Vector[Double],
@@ -3170,10 +3156,7 @@ object MtbRoutePlanner:
 
                             sequence(writes).flatMap { _ =>
                               verifyProductionFiles(output).map { _ =>
-                                RunResult(
-                                  classes,assignment,finals,audits,demanding,diag,status,
-                                  breakpointsAll,assignments,baselines
-                                )
+                                RunResult(classes,assignment,audits,demanding)
                               }
                             }
                         }
@@ -3531,7 +3514,7 @@ object MtbRoutePlanner:
         Vector(Point(0,0,0),Point(0,0.001,ele)),
         Vector(Point(0,0,0),Point(0,0.001,ele)),
         10,Vector.empty,1,1,0.01,RiderMetrics.Empty,WallMetrics(0,0,0),
-        .2,0,.2,Vector.empty,Vector.empty,Vector.empty
+        .2,0,.2,Vector.empty
       )
       assertT(semanticKey(c("a",10.0000))!=semanticKey(c("b",10.0004)),
         "nearby elevation was incorrectly rounded into semantic equality")
@@ -3549,7 +3532,7 @@ object MtbRoutePlanner:
         val ps=Vector(Point(53,10,100),Point(53,10.00001,100))
         val rm=RiderMetrics(sec,0,0,0,Streak.Empty,Streak.Empty,Streak.Empty,0)
         Connector(id,from,to,Profiles.head,ps,ps,sec,Vector.empty,sec,0,0.01,
-          rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty,Vector.empty,Vector.empty)
+          rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty)
 
       val g=Map[(String,String),Vector[Connector]](
         ("START","A")->Vector(c("sa","START","A",1)),
@@ -3579,7 +3562,7 @@ object MtbRoutePlanner:
       val trails=Vector(a,b)
       def conn(id:String,from:String,to:String,ps:Vector[Point])=Connector(
         id,from,to,Profiles.head,ps,ps,1,Vector.empty,0,0,0.01,
-        RiderMetrics.Empty,WallMetrics(0,0,0),0,0,0,Vector.empty,Vector.empty,Vector.empty
+        RiderMetrics.Empty,WallMetrics(0,0,0),0,0,0,Vector.empty
       )
       val enterB=conn("e","START","B",Vector(Point(0,0,0),Point(0,0.004,999)))
       val bToA=conn("ba","B","A",Vector(Point(0,0.005,888),Point(0,0.003,70),Point(0,0.001,777)))
@@ -3645,7 +3628,7 @@ object MtbRoutePlanner:
         val rm=physics(ps,0.010)
         Connector(
           id,from,to,Profiles.head,ps,ps,1,Vector.empty,rm.duration,0,0.01,
-          rm,WallMetrics(0,0,0),0,0,0,Vector.empty,Vector.empty,Vector.empty
+          rm,WallMetrics(0,0,0),0,0,0,Vector.empty
         )
       val enter=conn("e","START","T")
       val finish=conn("f","T","FINISH_LOOP")
@@ -3718,7 +3701,7 @@ object MtbRoutePlanner:
         )
         Connector(
           id,from,to,Profiles.head,ps,ps,duration,Vector.empty,0,0,0.01,
-          rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty,Vector.empty,Vector.empty
+          rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty
         )
       val noHorizonBaseline=rt("no-horizon-baseline",10,10)
       val start=c("slow-comfort","START","T",1010,5)
