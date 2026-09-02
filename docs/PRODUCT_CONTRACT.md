@@ -8,7 +8,7 @@ It intentionally does **not** describe:
 
 - implementation stages, algorithms, data structures, geometry/index representations, or Valhalla API usage — see `ARCHITECTURE.md`;
 - which alternatives are currently established, rejected, or open — see `CURRENT_STATE.md`;
-- agent workflow — see `../AGENTS.md`;
+- governance and change discipline — see `../.specify/memory/constitution.md`;
 - historical experiments or rationale — use ADRs / evidence history.
 
 Contract IDs are intended to remain stable. If implementation changes while a contract remains valid, keep the ID and wording unless the requirement itself changes.

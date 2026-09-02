@@ -21,13 +21,19 @@ It is **not** permission to invent new product or architecture semantics.
 
 Respect the repository ownership model:
 
-- `AGENTS.md` — how agents work;
+- `.specify/memory/constitution.md` — repository governance and change-process authority;
 - `docs/CURRENT_STATE.md` — what is established / rejected / open;
 - `docs/PRODUCT_CONTRACT.md` — what the product must guarantee independent of implementation;
 - `docs/ARCHITECTURE.md` — how the current implementation realizes those guarantees;
 - `docs/TEST_MATRIX.md` — what executable regression protects what;
 - ADR / evidence history — why a decision was made or what experiments established it;
 - `trail-plan.scala` — executable production implementation and regression suite.
+
+`AGENTS.md` is a thin repository entrypoint/router, not a canonical governance owner.
+
+When a Spec Kit change is active, its `specs/<change>/` artifacts are authoritative for the approved change-scoped intent, plan, research, and tasks. They may propose changes to durable current truth, but they do not become permanent product/architecture owners merely by being active or by remaining in history after completion. Durable truth must be synchronized back to the canonical owner required by the constitution.
+
+Before classification or promotion, read `.specify/memory/constitution.md`, then the relevant active Spec Kit change artifacts when present, then the canonical owners relevant to the fact being classified.
 
 One fact should have one canonical textual owner.
 
@@ -264,9 +270,13 @@ Preserve rationale outside current-truth docs only when it records durable decis
 
 Do not create an ADR for a comment that merely restates a mechanism already recorded in `ARCHITECTURE.md`, is obvious from the code, or contains no durable decision rationale.
 
-### 6. Agent workflow
+### 6. Governance / change process
 
-If the fact is about how future agents must work, it belongs in `AGENTS.md`.
+If the fact is about how future agents or substantive repository changes must work across changes, it belongs in `.specify/memory/constitution.md`.
+
+`AGENTS.md` remains a thin entrypoint/router and must not become a second owner of governance rules.
+
+If the rule applies only to the active change, keep it in the relevant `specs/<change>/` artifact instead of promoting it to repository-wide governance.
 
 Examples:
 
@@ -275,7 +285,7 @@ Examples:
 - performance work must preserve the problem being solved;
 - do not weaken product/safety contracts to make a route succeed.
 
-Do not put product semantics into `AGENTS.md`.
+Do not put product semantics into the constitution or `AGENTS.md`.
 
 ## Product vs architecture test
 
@@ -364,7 +374,7 @@ If an existing invariant already covers the finding, update protection/evidence 
 
 ### 5. Decide whether a regression is required
 
-Every newly established permanent product or architecture invariant requires regression protection, regardless of how it was established — reproduced defect, independent review, code/data contract, or any other accepted evidence source. This is not discretionary and agrees with the `AGENTS.md` Done criteria.
+Every newly established permanent product or architecture invariant requires regression protection, regardless of how it was established — reproduced defect, independent review, code/data contract, or any other accepted evidence source. This is not discretionary and is required by `.specify/memory/constitution.md`.
 
 A reproduced defect is a common way an invariant becomes established, but it does not create a different regression standard. Whether knowledge is truly permanent and established is decided by the earlier evidence and classification stages, not here.
 
@@ -559,7 +569,7 @@ Before finishing, verify:
 - `PRODUCT_CONTRACT.md` contains only implementation-independent normative guarantees;
 - `ARCHITECTURE.md` contains implementation architecture, not historical rationale;
 - `CURRENT_STATE.md` contains status/rejections/open questions, not duplicate contracts;
-- `AGENTS.md` contains workflow only;
+- `.specify/memory/constitution.md` owns repository governance/change-process rules, while `AGENTS.md` remains a thin entrypoint/router;
 - rationale/history is preserved outside current-truth docs when it matters.
 
 ### Traceability
@@ -582,7 +592,7 @@ After applying invariant promotion, report concisely:
    - the one-sentence durable invariant or decision;
 
 2. **Classification**
-   - product contract / architecture invariant / current-state decision / baseline / rationale / workflow;
+   - product contract / architecture invariant / current-state decision / baseline / rationale / governance/workflow;
 
 3. **Evidence**
    - exact requirement, reproduction, test, code/data fact, or review finding supporting promotion;

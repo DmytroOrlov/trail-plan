@@ -15,7 +15,7 @@ Canonical owners:
 - product requirements → `PRODUCT_CONTRACT.md`;
 - implementation architecture → `ARCHITECTURE.md`;
 - established/rejected/open status → `CURRENT_STATE.md`;
-- test/change discipline → `../AGENTS.md`.
+- governance/change discipline → `../.specify/memory/constitution.md`.
 
 Until tests receive stable IDs in source, this matrix identifies them by their exact `ts.test(...)` names. Test numbers are intentionally not treated as stable identifiers.
 
@@ -107,7 +107,7 @@ Dataset-specific facts in this section must not be promoted into `PRODUCT_CONTRA
 
 # Coverage gaps
 
-This section is diagnostic. `MISSING` or `PARTIAL` does **not** automatically mean “add a new test”. Follow `AGENTS.md`: first decide whether the property is a permanent invariant, then prefer extending an existing contract test when that is the same architectural contract.
+This section is diagnostic. `MISSING` or `PARTIAL` does **not** automatically mean “add a new test”. Follow `../.agents/skills/invariant-promotion/SKILL.md`: first decide whether the property is a permanent invariant, then prefer extending an existing contract test when that is the same architectural contract.
 
 ## Missing direct product-contract protection
 
@@ -153,4 +153,4 @@ When a test is added, removed, renamed, or materially changes what it proves, up
 
 When a `PC-*` requirement or architecture invariant is added, removed, or materially changed, review this matrix in the same change and explicitly classify its coverage.
 
-See `../AGENTS.md` for repository change discipline.
+See `../.specify/memory/constitution.md` for repository governance and change discipline.

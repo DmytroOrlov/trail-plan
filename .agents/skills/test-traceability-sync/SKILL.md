@@ -28,12 +28,16 @@ The purpose of this skill is **traceability consistency**, not product design.
 
 Respect the repository ownership model:
 
-- `AGENTS.md` — how agents work;
+- `.specify/memory/constitution.md` — repository governance and change-process authority;
 - `docs/CURRENT_STATE.md` — established / rejected / open status;
 - `docs/PRODUCT_CONTRACT.md` — what the product must guarantee;
 - `docs/ARCHITECTURE.md` — how the current implementation works;
 - `docs/TEST_MATRIX.md` — which executable regression protects which contract/invariant;
 - `trail-plan.scala` — executable production code and regression suite.
+
+`AGENTS.md` is a thin repository entrypoint/router, not a canonical governance owner.
+
+When a Spec Kit change is active, use its `specs/<change>/` artifacts to understand the approved change-scoped intent and implementation work. They do not become permanent current product/architecture owners; durable truth must be synchronized back to the canonical owner required by the constitution.
 
 Never move normative meaning into `TEST_MATRIX.md`.
 
@@ -77,12 +81,17 @@ Do not redefine or weaken them in this skill.
 
 Before changing traceability, read the relevant parts of:
 
-1. `AGENTS.md`;
-2. `docs/CURRENT_STATE.md`;
-3. `docs/PRODUCT_CONTRACT.md`;
-4. `docs/ARCHITECTURE.md`;
-5. `docs/TEST_MATRIX.md`;
-6. the affected tests in `trail-plan.scala`.
+1. `.specify/memory/constitution.md`;
+2. the active `specs/<change>/` artifacts, when a Spec Kit change is active;
+3. `docs/CURRENT_STATE.md`;
+4. `docs/PRODUCT_CONTRACT.md`;
+5. `docs/ARCHITECTURE.md`;
+6. `docs/TEST_MATRIX.md`;
+7. the affected tests in `trail-plan.scala`.
+
+`AGENTS.md` may be used as the repository entrypoint/router, but it does not override the constitution or canonical owners above.
+
+Active Spec Kit artifacts describe the assigned change; do not treat them as permanent current product or architecture truth unless the durable owner is updated through the governing change process.
 
 Do not infer a requirement from the matrix when the canonical owner is available.
 
@@ -299,7 +308,7 @@ Examples:
 - a previously accepted approximation is shown incorrect;
 - a new rejected direction is established.
 
-In those cases, first classify and promote the new invariant to its canonical owner, add regression protection as required by `AGENTS.md`, and then use this skill to synchronize `docs/TEST_MATRIX.md`.
+In those cases, first classify and promote the new invariant to its canonical owner, add regression protection as required by `.specify/memory/constitution.md` and the invariant-promotion discipline, and then use this skill to synchronize `docs/TEST_MATRIX.md`.
 
 ## Completion criteria
 
@@ -327,8 +336,10 @@ After applying changes, report concisely:
 5. unresolved references, if any;
 6. confirmation that no coverage claim was strengthened without executable evidence;
 7. confirmation that canonical owners remain:
+   - governance / change process → `.specify/memory/constitution.md`;
    - product semantics → `PRODUCT_CONTRACT.md`;
    - implementation architecture → `ARCHITECTURE.md`;
    - decision status → `CURRENT_STATE.md`;
    - executable traceability → `TEST_MATRIX.md`;
-   - workflow → `AGENTS.md`.
+   - `AGENTS.md` → thin repository entrypoint/router only;
+   - active `specs/<change>/` artifacts → change-scoped intent/plan/research/tasks only, not permanent current product/architecture ownership.
