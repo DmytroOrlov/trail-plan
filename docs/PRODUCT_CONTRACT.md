@@ -184,6 +184,12 @@ For C2/C3, an upgrade must also genuinely require wall severity above the previo
 
 Adding a far, low-marginal-benefit comfort-tail alternative must not move an already-established local tradeoff elbow when the new alternative does not change the neighboring tradeoff geometry around that elbow.
 
+For post-search product selection, `candHard` has a 1.0-second materiality resolution. After the exact eligible Pareto frontier is formed, candidates are considered in increasing transfer order. The first point is retained; a later point creates a new meaningful comfort point only when it improves `candHard` by at least 1.0 second relative to the last retained meaningful point. Otherwise it belongs to the same comfort plateau, represented by the lower-transfer retained point.
+
+The local marginal-drop selector operates on this meaningful tradeoff frontier.
+
+This resolution applies only to post-search product selection. It must not quantize rider search, eligibility, dominance, safety calculations, or any pre-selection state.
+
 This does **not** mean that arbitrary new Pareto alternatives may never change the selected route.
 
 ## Reconstruction and final audit

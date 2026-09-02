@@ -1614,11 +1614,7 @@ object MtbRoutePlanner:
         if code/100 != 2 then Left(s"Valhalla trace_attributes failure HTTP $code: ${body.take(500)}")
         else
           boundary("decode trace_attributes JSON")(ujson.read(body)).flatMap { json =>
-            val shapeResult:Result[Vector[Point]] =
-              json.obj.get("shape") match
-                case Some(Str(encoded)) => decodePolyline6(encoded)
-                case _ => Right(shape)
-
+            val shapeResult=traceResponseShape(json,shape)
             val edgeValues=json.obj.get("edges") match
               case Some(a:Arr) => Right(a.arr.toVector)
               case _ => Left("Valhalla trace_attributes response missing edges")
@@ -1751,6 +1747,27 @@ object MtbRoutePlanner:
 
   def dedupeBoundary(points:Vector[Point]):Vector[Point] =
     points.foldLeft(Vector.empty[Point])((a,p)=>if a.lastOption.exists(q=>q.lat==p.lat&&q.lon==p.lon) then a else a:+p)
+
+  // PC-SAFE-01: `/trace_attributes` must be judged on its own returned shape.
+  // `requestShape` is retained only as the anti-substitution witness that the
+  // request `/route` geometry is never returned in place of a missing or
+  // invalid trace geometry; it is not used to build any accepted result.
+  def traceResponseShape(json: Value, requestShape: Vector[Point]): Result[Vector[Point]] =
+    json.obj.get("shape") match
+      case Some(Str(encoded)) =>
+        decodePolyline6(encoded).flatMap(traceShapeGeometry) match
+          case Right(traced) => Right(traced)
+          case Left(problem) => Left(s"Valhalla trace_attributes rejected its own response shape: $problem")
+      case Some(_) => Left("Valhalla trace_attributes response shape is not a polyline6 string")
+      case None => Left("Valhalla trace_attributes response is missing its own shape")
+
+  def traceShapeGeometry(traced: Vector[Point]): Result[Vector[Point]] =
+    val invalidCoordinate = traced.exists(p =>
+      !p.lat.isFinite || !p.lon.isFinite || p.lat < -90.0 || p.lat > 90.0 || p.lon < -180.0 || p.lon > 180.0
+    )
+    if traced.size < 2 then Left("Valhalla trace_attributes response shape is degenerate (<2 points)")
+    else if invalidCoordinate then Left("Valhalla trace_attributes response shape contains an invalid coordinate")
+    else Right(traced)
 
   def attachElevations(shape:Vector[Point],elev:Vector[Double]):Vector[Point] = shape.zip(elev).map{case(p,e)=>p.copy(ele=e)}
 
@@ -2379,6 +2396,26 @@ object MtbRoutePlanner:
       }
       Some(scored.minBy(x => (-x.score,x.selected.transfer,x.selected.rider.candHard,productSecondaryKey(x.selected))))
 
+  // PC-SELECT-01 post-search materiality resolution. The exact eligible
+  // Pareto frontier is traversed in increasing transfer order: the first
+  // point is retained, and a later point creates a new meaningful comfort
+  // point only when it improves candHard by at least 1.0 s relative to the
+  // last retained meaningful point. A sub-1.0 s gain belongs to the same
+  // comfort plateau, represented by the lower-transfer retained point.
+  // candHard is never mutated or quantized here, and this stage runs only
+  // after exact search, eligibility, dominance, and safety computations;
+  // degenerate (<2 meaningful point) frontiers keep the existing
+  // head-selection behavior inside selectLocalMarginalDrop.
+  val ComfortMaterialitySeconds: Double = 1.0
+
+  def resolveComfortMateriality(front: Vector[RiderTerminal]): Vector[RiderTerminal] =
+    front.foldLeft(Vector.empty[RiderTerminal]) { (retained, point) =>
+      if retained.isEmpty ||
+        retained.last.rider.candHard - point.rider.candHard >= ComfortMaterialitySeconds
+      then retained :+ point
+      else retained
+    }
+
 
   // TEST-ONLY legacy comparator retained solely by regression #19 to prove the
   // old global-extrema-normalized selector is tail-sensitive.
@@ -2497,7 +2534,7 @@ object MtbRoutePlanner:
       }
     }
     val productFront=tradeoffFrontierValues(tradeoffFrontier)
-    val localSelection=selectLocalMarginalDrop(productFront)
+    val localSelection=selectLocalMarginalDrop(resolveComfortMateriality(productFront))
     val selectedFront=localSelection.map(_.selected).toVector
     localSelection.foreach { e =>
       appendLiveDebug(
@@ -2530,7 +2567,7 @@ object MtbRoutePlanner:
       val tree=new java.util.TreeMap[java.lang.Double,RiderTerminal]()
       e.foreach(c=>insertTradeoffFrontier(tree,c))
       val productFront=tradeoffFrontierValues(tree)
-      selectLocalMarginalDrop(productFront).map(_.selected).getOrElse(productFront.head)
+      selectLocalMarginalDrop(resolveComfortMateriality(productFront)).map(_.selected).getOrElse(productFront.head)
 
   def sameHorizontalPoint(a:Point,b:Point):Boolean = a.lat==b.lat && a.lon==b.lon
   def exactPoint(a:Point,b:Point):Boolean = sameHorizontalPoint(a,b) && a.ele==b.ele
@@ -3321,8 +3358,9 @@ object MtbRoutePlanner:
       assertT(protectedCycle("dedicated"))
     }
 
-    // 6. Transfer physics contract.
-    ts.test("transfer physics uses 30m grade chunks and downhill coasting") {
+    // 6. Transfer physics contract: the ~30 m chunk window and the <15 m
+    //    short-tail merge are behaviorally necessary, plus downhill coasting.
+    ts.test("transfer physics uses 30m grade chunks, short-tail merging, and downhill coasting") {
       val origin=Point(53.0,10.0,100.0)
       def east(m:Double,ele:Double)=Point(
         origin.lat,
@@ -3335,6 +3373,44 @@ object MtbRoutePlanner:
       val ride=segmentRide(-0.10,0.010,None)
       assertT(ride.coasting,s"ride=$ride")
       near(ride.riderPowerW,0.0,1e-12)
+
+      // The 30 m window is behaviorally necessary: only the canonical
+      // 31.5 m/31.5 m flush pair nets two flat chunks. A 20 m world exposes a
+      // +38% climb chunk (candHard/spike become nonzero); a 40 m world
+      // coarsens the first chunk to 42 m @ +9.5% and changes duration.
+      val window=Vector(
+        east(0.0,100.0),east(10.5,98.5),east(21.0,96.0),east(31.5,100.0),
+        east(42.0,104.0),east(52.5,101.5),east(63.0,100.0)
+      )
+      val windowRider=physics(window,0.010)
+      near(windowRider.duration,13.522297774009317,1e-6)
+      assertT(
+        windowRider.t120==0.0 && windowRider.t140==0.0 && windowRider.t160==0.0 &&
+          windowRider.candHard==0.0 && windowRider.spike==0.0 &&
+          windowRider.streak180.localMax==0.0,
+        s"30m window must net two flat chunks: $windowRider"
+      )
+
+      // The short-tail merge is behaviorally necessary: a 14.1 m final chunk
+      // (<15.0 m threshold) merges into a 44.5 m @ ~11.2% single chunk with no
+      // power exposure, while a 16.1 m chunk stays separate as 31.1% (~278 W).
+      // The merged case is deliberately slower in duration; the tuple is the
+      // pin, not a speed intuition.
+      val tailBase=Vector(east(0.0,100.0),east(15.2,100.0),east(30.4,100.0))
+      val mergedRider=physics(tailBase:+east(44.5,105.0),0.010)
+      near(mergedRider.duration,43.092596438400820,1e-6)
+      assertT(
+        mergedRider.t120==0.0 && mergedRider.t140==0.0 && mergedRider.t160==0.0 &&
+          mergedRider.candHard==0.0 && mergedRider.spike==0.0,
+        s"14.1 m tail must merge into a sub-threshold chunk: $mergedRider"
+      )
+      val unmergedRider=physics(tailBase:+east(46.5,105.0),0.010)
+      near(unmergedRider.duration,22.115849829214582,1e-6)
+      near(unmergedRider.t120,15.590804554134040,1e-6)
+      near(unmergedRider.t140,15.590804554134040,1e-6)
+      near(unmergedRider.t160,15.590804554134040,1e-6)
+      near(unmergedRider.candHard,46.772413662402120,1e-6)
+      near(unmergedRider.spike,242.68284506105906,1e-6)
     }
 
     // 7. All independent hard wall boundaries.
@@ -3437,6 +3513,51 @@ object MtbRoutePlanner:
       )
       assertT(semanticKey(c("a",10.0000))!=semanticKey(c("b",10.0004)),
         "nearby elevation was incorrectly rounded into semantic equality")
+    }
+
+    // 12b. FR-006: the bit-exact ascent admissibility gate inside
+    // connectorDominates must keep a continuation-sensitive alternative in the
+    // pruned pre-search connector graph handed to downstream exact eligibility.
+    // The fixture is causal: B is strictly worse than A in transfer and equal
+    // in every other compared monotone resource, so A would legitimately
+    // collapse B if the bit-exact ascent admissibility gate were removed.
+    ts.test("connector continuation retention keeps ascent-distinct alternatives in the pruned graph") {
+      val st120=Streak(4.0,4.0,6.0,true,20.0)
+      val st140=Streak(2.0,2.0,3.0,false,20.0)
+      def rider(duration:Double,t120:Double,t140:Double,t160:Double,spike:Double)=
+        RiderMetrics(duration,t120,t140,t160,st120,st140,Streak.Empty,spike)
+      def connector(
+        id:String,profile:Profile,lat:Double,ele:Double,
+        duration:Double,t120:Double,t140:Double,t160:Double,spike:Double,
+        road:Double,wall:Double,ascent:Double
+      ):Connector=
+        val ps=Vector(Point(lat,10.0,ele),Point(lat,10.0001,ele))
+        Connector(
+          id,"X","Y",profile,ps,ps,duration,Vector.empty,road,ascent,0.010,
+          rider(duration,t120,t140,t160,spike),WallMetrics(0,0,0),wall,0.0,wall,Vector.empty
+        )
+      // A: locally better representative (strictly faster transfer).
+      val a=connector("cont-a",Profiles(0),53.0,100.0,100.0,5.0,2.0,1.0,3.0,10.0,.2,5.0)
+      // B: strictly worse transfer (110 > 100) and otherwise equal in every
+      // compared monotone resource, but ascentM differs non-bit-exactly
+      // (5.000000001 vs 5.0): continuation-sensitive interchangeability is not
+      // established, so the ascent admissibility gate must block the collapse.
+      val b=connector("cont-b",Profiles(1),53.0,100.5,110.0,5.0,2.0,1.0,3.0,10.0,.2,5.000000001)
+      // C: bit-exact-equal ascent to A with strictly worse transfer and every
+      // other compared resource equal -> the collapse case that must stay pruned.
+      val c=connector("cont-c",Profiles(2),53.00002,100.0,110.0,5.0,2.0,1.0,3.0,10.0,.2,5.0)
+      assertT(a.rider.candHard==8.0 && b.rider.candHard==8.0 && c.rider.candHard==8.0)
+      assertT(a.rider.duration<b.rider.duration,
+        "fixture must give A a strict normal-resource advantage so the ascent gate is the only blocker")
+      assertT(!connectorDominates(a,b),
+        "bit-exact ascent admissibility must block collapsing a continuation-distinct alternative")
+      assertT(!connectorDominates(b,a),
+        "the continuation-distinct alternative must not collapse its local twin either")
+      assertT(connectorDominates(a,c),
+        "a bit-exact-equal-ascent, locally strictly-worse connector must remain dominated")
+      val pruned=pruneConnectors(Vector(a,b,c)).map(_.id).toSet
+      assertT(pruned==Set("cont-a","cont-b"),
+        s"continuation-sensitive alternative must reach the pre-search graph handed to exact eligibility: $pruned")
     }
 
     // 13. RAW DP must enumerate a complete exact-once mandatory order.
@@ -3558,6 +3679,47 @@ object MtbRoutePlanner:
         "fixture must distinguish transfer vs technical downhill physics")
     }
 
+    // 18b. The real audit path (not only the recomputation helper) must reject
+    // deliberately inconsistent stored rider metrics (FR-005 / PC-AUDIT-01).
+    ts.test("independent final audit rejects inconsistent stored rider metrics") {
+      def nearStart(northM:Double,eastM:Double,ele:Double)=Point(
+        Start.lat+northM/EarthR*180/math.Pi,
+        Start.lon+eastM/(EarthR*math.cos(math.toRadians(Start.lat)))*180/math.Pi,
+        ele
+      )
+      val mandatoryPoints=Vector(nearStart(0.0,0.0,30.0),nearStart(2.0,3.0,18.0),nearStart(4.0,0.0,10.0))
+      val mandatory=Trail(
+        "T",mandatoryPoints,
+        demandingMeasurements(mandatoryPoints),
+        physics(mandatoryPoints,0.010,Some(TrailDownhillMaxKph))
+      )
+      def conn(id:String,from:String,to:String)=
+        val ps=Vector(nearStart(0.0,0.0,0.0),nearStart(1.0,0.0,0.0),nearStart(2.0,0.0,0.0))
+        val rm=physics(ps,0.010)
+        Connector(
+          id,from,to,Profiles.head,ps,ps,rm.duration,Vector.empty,rm.duration,0.0,0.010,
+          rm,WallMetrics(0,0,0),0,0,0,Vector.empty
+        )
+      val enter=conn("audit-e","START","T")
+      val finish=conn("audit-f","T","FINISH_LOOP")
+      val consistent=enter.rider.concat(mandatory.rider).concat(finish.rider)
+      def routeWith(rm:RiderMetrics)=RiderTerminal(
+        Mode.LOOP,0,0,0,rm,ClimbState.Empty,0,0,Vector(0),Vector(enter,finish),"audit-r"
+      )
+      def runAudit(rm:RiderMetrics)=
+        audit(routeWith(rm),.3,Mode.LOOP,Vector(mandatory),Vector.empty,Vector.empty,mandatoryPoints)
+      val control=runAudit(consistent)
+      assertT(!control.failures.contains("rider metrics recomputation mismatch"),
+        s"consistent stored metrics must not trip the audit rider check: ${control.failures}")
+      val inconsistent=consistent.copy(
+        duration=consistent.duration+1.5,
+        t120=consistent.t120+1.0
+      )
+      val rejected=runAudit(inconsistent)
+      assertT(rejected.failures.contains("rider metrics recomputation mismatch"),
+        s"audit must reject inconsistent stored rider metrics via auditSameRider: ${rejected.failures}")
+    }
+
     // 19. No fixed search horizon + local marginal-drop post-search selector.
     ts.test("exact no-horizon rider search + local marginal-drop selector") {
       val st=Streak.constant(1.0,false)
@@ -3634,6 +3796,122 @@ object MtbRoutePlanner:
       assertT(front.head.rider.candHard==5)
     }
 
+    ts.test("local selector preserves an established elbow under a near-zero comfort tail") {
+      val st=Streak.constant(1.0,false)
+      def rt(sig:String,t:Double,ch:Double)=RiderTerminal(
+        Mode.LOOP,t,0,.2,
+        RiderMetrics(t,ch,0,0,st,st,st,0),
+        ClimbState.Empty,0,0,Vector(),Vector(),sig
+      )
+      val elbow=rt("elbow",30,60)
+      val base=Vector(
+        rt("p0",10,100),
+        rt("p1",20,80),
+        elbow,
+        rt("tail1",100,59)
+      )
+      val extended=base :+ rt("tail2",1000,58.999999)
+      val baseSelected=selectLocalMarginalDrop(resolveComfortMateriality(base)).get.selected.signature
+      val extendedSelected=selectLocalMarginalDrop(resolveComfortMateriality(extended)).get.selected.signature
+      assertT(baseSelected=="elbow",s"base selected=$baseSelected")
+      assertT(
+        extendedSelected==baseSelected,
+        s"near-zero far comfort tail moved established elbow: base=$baseSelected extended=$extendedSelected"
+      )
+    }
+
+    ts.test("materiality resolution retains exactly 1.0 s gains and coalesces sub-1.0 s gains") {
+      val st=Streak.constant(1.0,false)
+      def rt(sig:String,t:Double,ch:Double)=RiderTerminal(
+        Mode.LOOP,t,0,.2,
+        RiderMetrics(t,ch,0,0,st,st,st,0),
+        ClimbState.Empty,0,0,Vector(),Vector(),sig
+      )
+      val chain=Vector(rt("p0",10,100),rt("p1",20,80),rt("elbow",30,60))
+      val retained=resolveComfortMateriality(chain :+ rt("boundaryExact",100,59.0))
+      assertT(
+        retained.map(_.signature)==Vector("p0","p1","elbow","boundaryExact"),
+        s"exactly 1.0 s gain must create a new meaningful point: ${retained.map(_.signature)}"
+      )
+      assertT(
+        selectLocalMarginalDrop(retained).get.selected.signature=="elbow",
+        "the retained boundary point must feed the selector as a meaningful frontier input"
+      )
+      val coalesced=resolveComfortMateriality(chain :+ rt("boundaryBelow",100,59.000001))
+      assertT(
+        coalesced.map(_.signature)==Vector("p0","p1","elbow"),
+        s"sub-1.0 s gain must coalesce into the (30,60)-representative plateau: ${coalesced.map(_.signature)}"
+      )
+      assertT(
+        coalesced.last.rider.candHard==60.0,
+        "the plateau representative must remain the lower-transfer retained point"
+      )
+    }
+
+    // 19c. T022: the production product-selection entry points must apply the
+    // PC-SELECT-01 materiality resolution themselves. Removing
+    // resolveComfortMateriality from either production call site must fail
+    // this regression; test-local composition of the two stages does not
+    // prove production wiring.
+    ts.test("production product selection applies the materiality resolution wiring") {
+      val st=Streak.constant(1.0,false)
+      def rt(sig:String,t:Double,ch:Double)=RiderTerminal(
+        Mode.LOOP,t,0,.2,
+        RiderMetrics(t,ch,0,0,st,st,st,0),
+        ClimbState.Empty,0,0,Vector(),Vector(),sig
+      )
+      val baseline=rt("wiring-baseline",0,120)
+      val extended=Vector(
+        rt("p0",10,100),
+        rt("p1",20,80),
+        rt("elbow",30,60),
+        rt("tail1",100,59),
+        rt("tail2",1000,58.999999)
+      )
+      val viaChooseFinal=chooseFinal(extended,baseline,0,Vector(.3,.4,.5))
+      assertT(
+        viaChooseFinal.signature=="elbow",
+        s"chooseFinal must apply the materiality resolution before local marginal-drop selection; selected ${viaChooseFinal.signature}"
+      )
+      // The same frontier fed through the rider-DP production selection path.
+      val dm=DemandingMeasurements(0,1,0,1,false,0,1,false)
+      val trail=Trail("T",Vector(Point(53,10,100),Point(53,10.00001,100)),dm,RiderMetrics.Empty)
+      def c(id:String,duration:Double,candHard:Double)=
+        val ps=Vector(Point(53,10,100),Point(53,10.00001,100))
+        val rm=RiderMetrics(
+          duration,candHard,0,0,
+          Streak.constant(duration,false),Streak.constant(duration,false),Streak.constant(duration,false),0
+        )
+        Connector(
+          id,"START","T",Profiles.head,ps,ps,duration,Vector.empty,0,0,0.01,
+          rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty
+        )
+      def finish(id:String,duration:Double)=
+        val ps=Vector(Point(53,10,100),Point(53,10.00001,100))
+        val rm=RiderMetrics(
+          duration,0,0,0,
+          Streak.constant(duration,false),Streak.constant(duration,false),Streak.constant(duration,false),0
+        )
+        Connector(
+          id,"T","FINISH_LOOP",Profiles.head,ps,ps,duration,Vector.empty,0,0,0.01,
+          rm,WallMetrics(0,0,0),.2,0,.2,Vector.empty
+        )
+      val starts=Vector(
+        c("wiring-p0",10,100),c("wiring-p1",20,80),c("wiring-elbow",30,60),
+        c("wiring-tail1",100,59),c("wiring-tail2",1000,58.999999)
+      )
+      val dpFront=riderDp(
+        Mode.LOOP,.3,None,rt("wiring-rider-dp-baseline",0,120),"selftest-wiring",
+        Vector(trail),
+        Map(("START","T")->starts,("T","FINISH_LOOP")->Vector(finish("wiring-finish",0)))
+      )
+      assertT(dpFront.size==1,s"riderDp product selection must return exactly one elbow; got ${dpFront.map(_.signature)}")
+      assertT(
+        dpFront.head.signature.contains("wiring-elbow"),
+        s"riderDp must apply the materiality resolution before local marginal-drop selection; selected ${dpFront.head.signature}"
+      )
+    }
+
     // 20. Comfort upgrades may not silently worsen guarded product/safety resources.
     ts.test("rider product selector preserves guardrails while improving candHard") {
       val baseStreak=Streak.constant(10,false)
@@ -3691,6 +3969,50 @@ object MtbRoutePlanner:
       assertT(finalGapLevel(249.999)==1)
       assertT(finalGapLevel(250.0)==2)
       assertT(FinalGapWarnM==100.0 && FinalGapFailM==250.0)
+    }
+
+    // 23. PC-SAFE-01 /FR-001: a `/trace_attributes` 2xx response is accepted only
+    // with its own valid usable shape; the request `/route` shape never substitutes.
+    ts.test("trace attributes fail closed on missing or invalid returned shape") {
+      def encNum(n:Long):String =
+        var v=n << 1
+        if n < 0 then v = ~v
+        val out=new StringBuilder
+        while (v & ~0x1fL) != 0 do
+          out.append((((v & 0x1fL) | 0x20L).toInt + 63).toChar)
+          v >>>= 5
+        out.append(((v & 0x1fL).toInt + 63).toChar)
+        out.toString
+      def polyline(deltas:(Long,Long)*):String =
+        deltas.map{case (dLat,dLon) => encNum(dLat)+encNum(dLon)}.mkString
+      val requestShape=Vector(Point(53.0,10.0,100.0),Point(53.0001,10.0001,100.0))
+      def rejected(body:Value,what:String):Unit =
+        traceResponseShape(body,requestShape) match
+          case Left(problem) =>
+            assertT(problem.contains("trace_attributes"),s"$what rejected without naming the trace response defect: $problem")
+          case Right(value) =>
+            assertT(false,s"$what must fail closed but was accepted: $value")
+      val validTrace=polyline((53000000L,10000000L),(100L,100L))
+      traceResponseShape(Obj("shape"->Str(validTrace),"edges"->Arr()),requestShape) match
+        case Right(traced) =>
+          assertT(traced.size==2,s"valid own trace shape must decode to 2 points: $traced")
+          near(traced.head.lat,53.0,1e-9)
+          near(traced.head.lon,10.0,1e-9)
+        case Left(problem) => assertT(false,s"valid own trace shape unexpectedly rejected: $problem")
+      rejected(Obj("edges"->Arr()),"missing shape")
+      rejected(Obj("shape"->Num(5.0),"edges"->Arr()),"non-string shape")
+      rejected(Obj("shape"->Str("\u00ff"),"edges"->Arr()),"malformed polyline6")
+      rejected(Obj("shape"->Str(""),"edges"->Arr()),"empty shape")
+      rejected(Obj("shape"->Str(polyline((53000000L,10000000L))),"edges"->Arr()),"degenerate single-point shape")
+      rejected(Obj("shape"->Str(polyline((100000000L,0L),(0L,5000000L))),"edges"->Arr()),"out-of-range latitude")
+      rejected(Obj("shape"->Str(polyline((0L,200000000L),(100L,100L))),"edges"->Arr()),"out-of-range longitude")
+      traceShapeGeometry(Vector(Point(53.0,10.0,0.0),Point(Double.NaN,10.0,0.0))) match
+        case Left(problem) => assertT(problem.contains("invalid coordinate"),s"non-finite latitude rejected unclearly: $problem")
+        case Right(value) => assertT(false,s"non-finite latitude must fail closed but was accepted: $value")
+      assertT(traceShapeGeometry(Vector(Point(53.0,10.0,0.0),Point(Double.PositiveInfinity,10.0,0.0),Point(53.0001,10.0001,0.0))).isLeft,
+        "non-finite coordinate must fail closed")
+      assertT(traceShapeGeometry(Vector(Point(53.0,10.0,0.0),Point(53.0001,10.0001,0.0))).isRight,
+        "finite in-range non-degenerate geometry must be accepted")
     }
 
     ts

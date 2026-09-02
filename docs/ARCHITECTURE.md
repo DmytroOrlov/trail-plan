@@ -213,6 +213,16 @@ Before entering the solver, variants are reduced in two distinct ways:
 
 Near-identical geometry is not treated as semantic equality by rounding.
 
+Connector dominance is admissible only where connectors are safely
+interchangeable downstream: a connector may collapse another only when it is
+locally no-worse in every compared monotone resource and bit-exact equal in the
+continuity-sensitive compared components (connector ascent). A
+continuation-sensitive alternative that differs in any resource required for
+safe interchangeability in downstream exact eligibility is admissible and must
+survive pruning into the pre-search connector graph handed to exact
+eligibility; locally attractive alternatives are never collapsed on a
+transfer/road-style local comparison alone when such a component differs.
+
 Changing the production profile cover changes the connector graph search space and is therefore not a local tuning change.
 
 ## RAW search
@@ -254,7 +264,7 @@ Pruning against the RAW baseline is allowed only for resources whose future cont
 
 ## Post-search selection
 
-Product selection happens after exact rider search.
+Product selection happens after exact rider search and is staged.
 
 Eligible terminal upgrades form an exact two-dimensional Pareto frontier:
 
@@ -264,7 +274,19 @@ vs.
 candHard seconds
 ```
 
-Production selects the local marginal-drop elbow.
+```text
+exact eligible Pareto frontier
+-> 1.0 s candHard materiality resolution (meaningful product frontier)
+-> local marginal-drop selection
+```
+
+The materiality-resolution stage derives the meaningful frontier from the exact
+frontier before selection. Its product semantics are owned by `PC-SELECT-01`;
+this section records the stage placement only. The stage is post-search only:
+it does not feed back into rider search, eligibility, dominance, safety, or any
+pre-selection state.
+
+Production selects the local marginal-drop elbow on the meaningful frontier.
 
 The selector compares neighboring frontier segment slopes and chooses the point before the strongest local collapse in marginal comfort benefit.
 

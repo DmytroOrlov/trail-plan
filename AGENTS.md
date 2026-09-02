@@ -23,6 +23,8 @@ Before substantive work:
 Historical Scala snapshots, archived change artifacts, source-history comments,
 and prior chat context are not current authority.
 
+Build/run/test tooling: read `docs/DEVELOPMENT.md`.
+
 ## Skill routing
 
 `.agents/skills/invariant-promotion/SKILL.md` and
