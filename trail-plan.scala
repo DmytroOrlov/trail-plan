@@ -5,31 +5,10 @@
 //> using packaging.graalvmArgs --no-fallback
 
 // ============================================================================
-// PROJECT TODO / TEST-PROMOTION DISCIPLINE
+// TEST-ONLY NOTES + CLOSED EVIDENCE HISTORY
 // ============================================================================
-// - Whenever investigation evidence establishes a new PRODUCT INVARIANT or
-//   reproduces a real regression, promote that property into the default-running
-//   contract/regression suite in the same follow-up change whenever it can be
-//   expressed deterministically and without coupling to incidental run counts.
-//   Do NOT wait for a separate user reminder.
-// - If the property is still only a hypothesis or depends on one current dataset,
-//   keep it evidence-only and add an explicit TODO here/cleanup-ledger entry
-//   stating what evidence is still required before promotion.
-// - Prefer extending an existing contract test over increasing test count when
-//   the new assertion is the same architectural contract.
-// - Selector stability contract discovered in FIX50/FIX51 and promoted in
-//   FIX52: adding a FAR, low-marginal-benefit comfort tail must not move an
-//   already-established LOCAL elbow when the new points do not alter the
-//   neighboring tradeoff geometry around that elbow. This guards against the
-//   old global-extrema normalization failure; it is NOT a rule that arbitrary
-//   new Pareto points may never change the selected route.
-//
-// ============================================================================
-// TEMPORARY / TEST-ONLY CLEANUP LEDGER + CLOSED EVIDENCE HISTORY
-// ============================================================================
-// Rule: every new evidence-only, differential, temporary diagnostic, synthetic
-// test fixture, or transitional compatibility path MUST be added here when it is
-// introduced. Production semantics must not depend on anything in this list.
+// Historical notes below are non-authoritative context. Production semantics are
+// defined by executable behavior/tests and the repository's canonical owners.
 //
 // [TEST-ONLY CONTRACT SUITE REVIEW] FIX46 keeps exactly 22 default-running
 //        tests but rebalances them around product contracts instead of historical
@@ -133,18 +112,16 @@
 //   removed after this result was recorded.
 // ============================================================================
 
-import java.io.*
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path, Paths, StandardCopyOption, StandardOpenOption}
+import java.nio.file.{Files, Path, Paths, StandardOpenOption}
 import java.text.Normalizer
 import java.time.{Duration, Instant}
 import java.util.Locale
 import javax.xml.parsers.DocumentBuilderFactory
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
-import scala.util.control.NonFatal
 import scala.util.{Try, Success, Failure}
 import ujson.*
 
@@ -176,7 +153,6 @@ object MtbRoutePlanner:
   val WheelInch = 27.5
   val FrontTeeth = 32.0
   val RearTeeth = 51.0
-  val PreferredCadence = 80.0
   val MinimumCadence = 45.0
   val DrivetrainEfficiency = 0.95
   val TargetPower = 80.0
@@ -352,8 +328,7 @@ object MtbRoutePlanner:
       evidence: Vector[EvidenceApplication],
       avoidWarnings: Vector[(String, Double)],
       safetyProvenance: Vector[String]
-  ):
-    def signature: String = id
+  )
 
   enum Mode:
     case LOOP, P2P
@@ -363,10 +338,6 @@ object MtbRoutePlanner:
     def finishPoint: Point = this match
       case LOOP => LoopFinish
       case P2P => P2PFinish
-    def finishName: String = this match
-      case LOOP => StartName
-      case P2P => P2PFinishName
-
   case class RawLabel(mask: Int, last: Int, wall: Double, transfer: Double, road: Double, order: Vector[Int], connectors: Vector[Connector]):
     def signature(trails: Vector[Trail], mode: Option[Mode] = None): String =
       val base = order.map(i => trails(i).name).mkString("->") + "|" + connectors.map(_.id).mkString(";")
@@ -419,7 +390,6 @@ object MtbRoutePlanner:
   )
 
   case class AuditResult(failures: Vector[String], warnings: Vector[String]):
-    def ok: Boolean = failures.isEmpty
     def status: String = if failures.nonEmpty then "FAIL" else if warnings.nonEmpty then "WARN" else "PASS"
 
   case class Diagnostics(
@@ -437,10 +407,6 @@ object MtbRoutePlanner:
       timings: mutable.ArrayBuffer[(String, Double)] = mutable.ArrayBuffer.empty
   ):
     def reject(reason: String): Unit = hardRejects(reason) = hardRejects(reason) + 1
-    def reroute(corridor: String): Unit =
-      safetyReroutes += 1
-      safetyRerouteCorridors(corridor) = safetyRerouteCorridors(corridor) + 1
-
   case class Cli(
       input: Option[Path],
       output: Option[Path],
@@ -971,9 +937,6 @@ object MtbRoutePlanner:
   def segmentClosestParam(p: XY, a: XY, b: XY): Double =
     val ab=sub(b,a); val d=norm2(ab)
     if d<=1e-12 then 0.0 else math.max(0.0,math.min(1.0,dot(sub(p,a),ab)/d))
-
-  def pointSegDistance(p:XY,a:XY,b:XY):Double =
-    val t=segmentClosestParam(p,a,b); dist(p,add(a,mul(sub(b,a),t)))
 
   def solveCircleInterval(a:XY,b:XY,c:XY,r:Double): Option[(Double,Double)] =
     val d=sub(b,a); val f=sub(a,c); val A=norm2(d)
@@ -2429,12 +2392,6 @@ object MtbRoutePlanner:
       c.signature
     )
 
-  def transferFirstSelectorKey(c:RiderTerminal) =
-    (((c.transfer,c.rider.candHard),productSecondaryKey(c)),c.signature)
-
-  def comfortFirstSelectorKey(c:RiderTerminal) =
-    (((c.rider.candHard,c.transfer),productSecondaryKey(c)),c.signature)
-
   // Exact 2-D frontier accumulator.  Invariant: as transfer increases, candHard
   // strictly decreases.  Same-transfer/same-candHard ties keep the better guarded
   // secondary metrics/signature.  This is product selection only and never prunes
@@ -2574,15 +2531,9 @@ object MtbRoutePlanner:
 
     var bits=1
     while bits<n do
-      val layerStarted=System.nanoTime()
-      val insertBefore=perf.insertNanos
-      val checksBefore=perf.dominanceChecks
-      val generatedBefore=generatedLabels
-      val prunedBefore=baselinePruned
       val snapshot=states.toVector
         .filter { case(key,_) => Integer.bitCount(key._1)==bits }
         .sortBy(_._1)
-      val layerLabels=snapshot.map(_._2.size).sum
       snapshot.foreach { case(key,labels) =>
         val mask=key._1
         val last=key._2
@@ -2614,9 +2565,6 @@ object MtbRoutePlanner:
       .filter { case(key,_) => key._1==full }
       .sortBy(_._1)
     val terminalStarted=System.nanoTime()
-    val terminalLabels=fullGroups.map(_._2.size).sum
-    var terminalGroupsDone=0
-    var terminalLabelsDone=0L
     var terminalCandidatesChecked=0L
     var eligibleCandidates=0L
     val tradeoffFrontier=new java.util.TreeMap[java.lang.Double,RiderTerminal]()
@@ -2624,7 +2572,6 @@ object MtbRoutePlanner:
     fullGroups.foreach { case(key,labels) =>
       val last=key._2
       labels.foreach { l =>
-        terminalLabelsDone += 1
         graph.getOrElse((trails(last).name,mode.finishKey),Vector.empty).filter(_.effectiveWall<=ceiling).foreach { c =>
           terminalCandidatesChecked += 1
           val rm=l.rider.concat(c.rider)
@@ -2637,7 +2584,6 @@ object MtbRoutePlanner:
             insertTradeoffFrontier(tradeoffFrontier,terminal)
         }
       }
-      terminalGroupsDone += 1
     }
     appendLiveDebug(
       f"rider-terminal DONE $debugLabel candidates=$terminalCandidatesChecked eligible=$eligibleCandidates frontier=${tradeoffFrontier.size} bestFound=${!tradeoffFrontier.isEmpty} elapsed=${(System.nanoTime()-terminalStarted)/1e9}%.3fs"
@@ -2659,55 +2605,6 @@ object MtbRoutePlanner:
         f"insertCalls=${perf.insertCalls} dominanceChecks=${perf.dominanceChecks} insertSec=${perf.insertNanos/1e9}%.3f totalSec=${(System.nanoTime()-dpStarted)/1e9}%.3f"
     )
     selectedFront
-
-  def riderTerminalNoWorse(a:RiderTerminal,b:RiderTerminal):Boolean =
-    val ar=a.rider;val br=b.rider
-    a.transfer<=b.transfer&&ar.candHard<=br.candHard&&streakNoWorse(ar.streak120,br.streak120)&&streakNoWorse(ar.streak140,br.streak140)&&ar.spike<=br.spike&&a.road<=b.road&&a.climb.maxAscent<=b.climb.maxAscent&&a.climb.upward<=b.climb.upward&&a.climb.roughness<=b.climb.roughness&&a.warmupPenalty<=b.warmupPenalty&&a.demandingAdjacency<=b.demandingAdjacency&&a.requiredWall<=b.requiredWall
-  def riderTerminalStrict(a:RiderTerminal,b:RiderTerminal):Boolean = a.transfer<b.transfer||a.rider.candHard<b.rider.candHard||a.rider.streak120.localMax<b.rider.streak120.localMax||a.rider.streak140.localMax<b.rider.streak140.localMax||a.rider.spike<b.rider.spike||a.road<b.road||a.climb.maxAscent<b.climb.maxAscent||a.climb.upward<b.climb.upward||a.climb.roughness<b.climb.roughness||a.warmupPenalty<b.warmupPenalty||a.demandingAdjacency<b.demandingAdjacency||a.requiredWall<b.requiredWall
-
-  def paretoRiderTerminals(
-      v:Vector[RiderTerminal],
-      prev:Option[Double],
-      debugLabel:Option[String]=None
-  ):Vector[RiderTerminal] =
-    val started=System.nanoTime()
-    val kept=Vector.newBuilder[RiderTerminal]
-    var keptCount=0L
-    var bi=0
-    var comparisons=0L
-    var nextComparisonHeartbeat=25_000_000L
-    while bi < v.size do
-      val b=v(bi)
-      var ai=0
-      var dominated=false
-      while ai < v.size && !dominated do
-        val a=v(ai)
-        comparisons += 1
-        if
-          a.signature != b.signature &&
-          prev.forall(pc=>(a.requiredWall>pc)==(b.requiredWall>pc)) &&
-          riderTerminalNoWorse(a,b) &&
-          riderTerminalStrict(a,b)
-        then dominated=true
-        ai += 1
-        if comparisons >= nextComparisonHeartbeat then
-          debugLabel.foreach { label =>
-            appendLiveDebug(
-              f"rider-pareto HEARTBEAT $label rows=$bi/${v.size} comparisons=$comparisons kept-so-far=$keptCount elapsed=${(System.nanoTime()-started)/1e9}%.3fs"
-            )
-          }
-          nextComparisonHeartbeat += 25_000_000L
-      if !dominated then
-        kept += b
-        keptCount += 1
-      bi += 1
-      if bi == 1 || bi % 5000 == 0 || bi == v.size then
-        debugLabel.foreach { label =>
-          appendLiveDebug(
-            f"rider-pareto PROGRESS $label rows=$bi/${v.size} comparisons=$comparisons elapsed=${(System.nanoTime()-started)/1e9}%.3fs"
-          )
-        }
-    kept.result().sortBy(_.signature)
 
   def evaluateRaw(raw:RawTerminal,trails:Vector[Trail]):RiderTerminal =
     var rm=RiderMetrics.Empty; var climb=ClimbState.Empty
@@ -3940,13 +3837,6 @@ object MtbRoutePlanner:
       s"Build id: $BuildId\nArgs: ${args.mkString(" ")}\nExecution status: RUNNING\n"
     )
   }
-
-  def throwableText(e:Throwable):String =
-    val sw = new StringWriter()
-    val pw = new PrintWriter(sw)
-    e.printStackTrace(pw)
-    pw.flush()
-    sw.toString
 
   def selfTestDebug(ts:TestState,args:Array[String]):String =
     val b = new StringBuilder
