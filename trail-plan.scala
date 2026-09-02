@@ -300,7 +300,7 @@ object MtbRoutePlanner:
       math.max(math.max(safe(max30Pct) / 27.0, safe(max100Pct) / 20.0), safe(above180Seconds) / 90.0)
     def hardInvalid: Boolean = max30Pct >= 27.0 || max100Pct >= 20.0 || above180Seconds >= 90.0
 
-  case class EvidenceCandidate(corridor: String, windowM: Double, s: Double, grade1Pct: Double, grade2Pct: Double, commonPct: Double)
+  case class EvidenceCandidate(corridor: String, windowM: Double, s: Double, commonPct: Double)
   case class EvidenceApplication(corridor: String, severity: Double, details: Vector[String])
 
   case class Connector(
@@ -1319,16 +1319,7 @@ object MtbRoutePlanner:
       case _ => None
     }.toVector
 
-  case class CorridorMatch(
-      matched:Boolean,
-      candidateToRideP90M:Double,
-      rideToCandidateP90M:Double,
-      lengthRatio:Double,
-      startGapM:Double,
-      endGapM:Double
-  )
-
-  def evidenceCorridorMatch(candidate:Vector[Point], reference:Vector[Point]):CorridorMatch =
+  def evidenceCorridorMatches(candidate:Vector[Point], reference:Vector[Point]):Boolean =
     val candidateDense=samplePolyline(candidate,20.0)
     val referenceDense=samplePolyline(reference,20.0)
     val candidateLength=if candidateDense.size>=2 then cumulative(candidateDense).last else 0.0
@@ -1347,13 +1338,11 @@ object MtbRoutePlanner:
     val endGap=
       if candidateDense.nonEmpty && referenceDense.nonEmpty then haversine(candidateDense.last,referenceDense.last)
       else Double.PositiveInfinity
-    val matched=
-      candidateDense.size>=2 &&
-        referenceDense.size>=2 &&
-        ratio>=0.75 && ratio<=1.30 &&
-        c2r<=18.0 && r2c<=18.0 &&
-        startGap<=70.0 && endGap<=70.0
-    CorridorMatch(matched,c2r,r2c,ratio,startGap,endGap)
+    candidateDense.size>=2 &&
+      referenceDense.size>=2 &&
+      ratio>=0.75 && ratio<=1.30 &&
+      c2r<=18.0 && r2c<=18.0 &&
+      startGap<=70.0 && endGap<=70.0
 
   /**
    * Safety-active real-ride evidence is derived only from transfer labels that
@@ -1412,7 +1401,7 @@ object MtbRoutePlanner:
                       g1=100.0*(r1-r0)/window
                       g2=100.0*(o1-o0)/window
                       if g1>0.0 && g2>0.0 && math.abs(g1-g2)<=tolerance
-                    yield EvidenceCandidate(label,window,s0,g1,g2,math.min(g1,g2))
+                    yield EvidenceCandidate(label,window,s0,math.min(g1,g2))
                   }.maxByOption(_.commonPct)
               }
               if bestByWindow.nonEmpty then Some(EvidenceCorridor(label,ref,bestByWindow))
@@ -1454,8 +1443,7 @@ object MtbRoutePlanner:
     val physical=wall.physicalSeverity
     val apps=mutable.ArrayBuffer.empty[EvidenceApplication]
     corridors.filter(_.label==connectorLabel).foreach { c =>
-      val global=evidenceCorridorMatch(geometry,c.reference)
-      if global.matched then
+      if evidenceCorridorMatches(geometry,c.reference) then
         val accepted=mutable.ArrayBuffer.empty[EvidenceCandidate]
         c.candidates.foreach { ev =>
           val localEvidenceGeom=slicePolyline(c.reference,ev.s,ev.s+ev.windowM)
@@ -2404,15 +2392,7 @@ object MtbRoutePlanner:
   def tradeoffFrontierValues(frontier:java.util.TreeMap[java.lang.Double,RiderTerminal]):Vector[RiderTerminal] =
     frontier.values().asScala.toVector
 
-  case class KneeSelection(
-      selected:RiderTerminal,
-      transferFirst:RiderTerminal,
-      comfortFirst:RiderTerminal,
-      score:Double,
-      transferFraction:Double,
-      comfortFraction:Double,
-      frontierSize:Int
-  )
+  case class KneeSelection(selected:RiderTerminal)
 
   case class LocalElbowSelection(
       selected:RiderTerminal,
@@ -2471,8 +2451,7 @@ object MtbRoutePlanner:
           val (score,_,_)=fractions(c)
           (-score,c.transfer,c.rider.candHard,productSecondaryKey(c))
         }
-      val (score,tx,cy)=fractions(selected)
-      Some(KneeSelection(selected,tf,cf,score,tx,cy,front.size))
+      Some(KneeSelection(selected))
 
   def riderDp(
       mode:Mode,
