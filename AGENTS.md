@@ -2,75 +2,30 @@
 
 # Trail Plan
 
-Preserve the single-file production shape defined in `docs/ARCHITECTURE.md` unless the user explicitly changes that constraint.
+This repository uses GitHub Spec Kit for substantive change execution.
 
-## Before changing code
+`.specify/memory/constitution.md` is the mandatory governance entry point. It
+owns source precedence, canonical ownership, working rules, change lifecycle,
+and completion criteria. This file is a repository router only and owns no
+governance rules.
 
-Read, when present:
+## Repository navigation
 
-1. `docs/CURRENT_STATE.md`
-2. `docs/ARCHITECTURE.md`
-3. `docs/PRODUCT_CONTRACT.md`
-4. relevant ADRs
-5. relevant tests
+Before substantive work:
 
-Current repository contracts override historical comments and old experiments.
+1. read `.specify/memory/constitution.md`;
+2. work through the active `specs/<change>/` artifacts when a Spec Kit change
+   exists;
+3. read the canonical owners the constitution requires:
+   `docs/PRODUCT_CONTRACT.md`, `docs/ARCHITECTURE.md`, `docs/CURRENT_STATE.md`,
+   `docs/TEST_MATRIX.md`, `docs/adr/`, and `trail-plan.scala`.
 
-## Change rules
+Historical Scala snapshots, archived change artifacts, source-history comments,
+and prior chat context are not current authority.
 
-* Make the smallest change that solves the established problem.
-* Do not invent new domain semantics or architecture without evidence.
-* Preserve the established contracts and architecture referenced by `docs/CURRENT_STATE.md`.
-* Do not make a route succeed by weakening an established product or safety contract.
-* Performance work must preserve the problem being solved.
-* Prefer removing a disproven heuristic over compensating for it with another heuristic.
-* When an investigation establishes new durable product/architecture knowledge or rejects an established direction, use `.agents/skills/invariant-promotion/SKILL.md` before traceability synchronization.
-* When executable test evidence, `docs/TEST_MATRIX.md` traceability, product contracts, or tested architecture invariants materially change, use `.agents/skills/test-traceability-sync/SKILL.md` to synchronize traceability in the same change.
+## Skill routing
 
-For a bug:
-
-1. reproduce it;
-2. identify the cause;
-3. determine whether it reveals a permanent invariant;
-4. if yes, add a regression test;
-5. make the minimal production change;
-6. run relevant tests and inspect resulting evidence;
-7. remove temporary diagnostics/experiments.
-
-Do not wait for a separate user request to add regression protection for an established invariant.
-
-A successful single route is not proof of correctness.
-
-## Architecture changes
-
-Do not reopen an established architectural decision merely because another design looks cleaner. The conditions that permit reopening are recorded in `docs/CURRENT_STATE.md` (Reopening an established decision).
-
-Record established current truth in repository documentation, not only in chat or source-history comments.
-
-## Review
-
-Treat the planner as unfamiliar production/safety-sensitive routing code.
-
-Derive behavior from code, tests, input contracts, and run evidence. Do not try to confirm author intent.
-
-Pay particular attention to:
-
-* silent contract weakening;
-* hidden approximation;
-* fail-open behavior;
-* confusion between different geometry/index spaces;
-* DP/reconstruction disagreement;
-* behavior that changes because of irrelevant alternatives or segmentation.
-
-## Done
-
-A change is done when:
-
-* the requested problem is addressed;
-* relevant contracts still hold;
-* every newly established invariant has regression protection;
-* relevant tests pass;
-* temporary investigation code is removed;
-* documentation and `docs/TEST_MATRIX.md` traceability reflect any changed established truth or test behavior.
-
-Compilation alone is not sufficient.
+`.agents/skills/invariant-promotion/SKILL.md` and
+`.agents/skills/test-traceability-sync/SKILL.md` remain the project mechanisms
+for newly established durable knowledge and traceability synchronization; the
+constitution defines when each applies.

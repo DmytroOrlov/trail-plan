@@ -54,7 +54,7 @@ The current production selector is established; see Post-search selection in `do
 
 ## Established engineering discipline
 
-The bug/regression workflow, change discipline, and definition of done are owned by `../AGENTS.md`.
+Governance, change discipline, and the definition of done (including the bug/regression workflow) are owned by `.specify/memory/constitution.md`. `AGENTS.md` is only the repository agent entrypoint that routes to the constitution and the canonical owners.
 
 ---
 
