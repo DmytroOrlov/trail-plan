@@ -5,24 +5,11 @@
 //> using packaging.graalvmArgs --no-fallback
 
 // ============================================================================
-// TEST-ONLY NOTES + CLOSED EVIDENCE HISTORY
+// CLOSED EVIDENCE HISTORY — NON-AUTHORITATIVE
 // ============================================================================
-// Historical notes below are non-authoritative context. Production semantics are
-// defined by executable behavior/tests and the repository's canonical owners.
-//
-// [TEST-ONLY CONTRACT SUITE REVIEW] FIX46 keeps exactly 22 default-running
-//        tests but rebalances them around product contracts instead of historical
-//        micro-fixes. Added direct coverage for CLI default/--no-test semantics,
-//        canonical input counts/identity, all three hard-wall thresholds,
-//        hard-vs-scored road policy, exact RAW complete-order behavior,
-//        mandatory exactly-once supplied-direction reconstruction, rider-selector
-//        guardrails, the human-report/exact-five-output-files contract, and the
-//        final reconstructed GPX 100m WARN / 250m FAIL thresholds. Historical
-//        regressions that still encode real contracts (corridor clipping,
-//        canonical <=10m safety sampling, real-ride direction, technical downhill
-//        policy, no-horizon exact rider search) remain. Tests are NOT scheduled
-//        for deletion; eventual extraction to a separate test source remains the
-//        cleanup target.
+// Historical evidence below is preserved because parts of it are not yet owned
+// by a dedicated evidence artifact. It does not define current product,
+// architecture, workflow, or test semantics; current repository owners do.
 //
 // [CLOSED / VALIDATED] FIX53 production12/local-selector adjudication:
 //        Canonical run passed 22/22 and E2E PASS. Restoring production12 reduced
@@ -54,12 +41,6 @@
 //        only if product requirements change or new evidence shows a selected
 //        route benefits from those additional semantic groups.
 //
-// [TEST-ONLY] In-file self-test harness and synthetic fixtures (`runSelfTests`,
-//        selftest-no-horizon, geometry/road/DP fixtures).
-//        Current product contract requires tests to run by default, so DO NOT
-//        delete them yet. If/when they move to a separate test artifact, remove
-//        the embedded harness and fixtures from the production source in the same
-//        change; retain only `--no-test` behaviour if still required.
 //
 // Already removed temporary evidence:
 // - FIX31 `road-primary-evidence` per-connector logging.
@@ -167,26 +148,23 @@ object MtbRoutePlanner:
   //
   // Rider product selection is applied only AFTER exact search. Among all
   // guard-safe strict candHard upgrades we build the exact 2-D Pareto frontier
-  // (transfer, candHard). Since FIX51 production selects the LOCAL marginal-drop
-  // elbow: compare neighboring frontier segment slopes (candHard seconds gained
-  // per additional transfer second) and select the point immediately before the
-  // strongest local collapse in marginal benefit. Transfer and candHard share
-  // the same unit (modeled seconds), so no global endpoint normalization is
-  // required. FIX50/FIX52 established and regression-test that a far low-benefit
-  // comfort tail must not move an unchanged local elbow. No +60/+600 window,
-  // migration route, fixed time horizon, weighted score, percentage detour
-  // budget, beam, top-K or epsilon search approximation is introduced.
+  // (transfer, candHard), compare neighboring frontier segment slopes, and select
+  // the point immediately before the strongest local collapse in marginal
+  // benefit. Transfer and candHard share the same unit (modeled seconds), so no
+  // global endpoint normalization is required. The default regression suite
+  // protects the established far-low-benefit-tail stability property. No fixed
+  // horizon, weighted score, beam, top-K, epsilon, or equivalent approximation
+  // is introduced.
   //
-  // ROAD POLICY (validated by FIX31/FIX32 A/B): finite unprotected-primary
+  // ROAD POLICY: finite unprotected-primary
   // exposure is measured road stress, not a duration-threshold hard deletion.
   // Motorway/trunk/steps/ferry/rail/impassable remain hard; unmodelable primary
   // duration remains fail-closed.
 
-  // HUMAN REPORT ONLY.  Keep ride optimization independent from stop planning.
-  // This preserves the useful old day.txt convention explicitly: 3 minutes
-  // before and 3 minutes after each mandatory technical GPX.  With the current
-  // 10 mandatory trails this adds 60 minutes to modeled moving time.  It does
-  // not affect connector generation, DP, wall classes, rider metrics or GPX.
+  // HUMAN REPORT ONLY. Keep ride optimization independent from stop planning.
+  // Reporting adds 3 minutes before and 3 minutes after each mandatory technical
+  // GPX. This does not affect connector generation, DP, wall classes, rider
+  // metrics, or GPX geometry.
   val HumanReportTrailPauseMin = 3.0
 
   case class Point(lat: Double, lon: Double, ele: Double)
@@ -194,19 +172,10 @@ object MtbRoutePlanner:
   case class Profile(speedKph: Double, useHills: Double, useRoads: Double):
     def id: String = f"v${speedKph}%.0f-h${useHills}%.2f-r${useRoads}%.2f"
 
-  // Production Valhalla search cover.
-  // FIX38 revalidated this set against the historically calibrated 25-profile
-  // superset under the CURRENT connector/safety/road semantics:
-  //   useful solver-semantic groups: production12=249, historical25=249
-  //   missing useful groups outside production12: 0
-  //   exact set-cover over current12: size=12
-  //   jointly removable production profiles: 0
-  // Therefore every profile below remains necessary for preserving the current
-  // useful connector-class cover, while the 13 historical audit-only profiles
-  // add no new useful solver-semantic group.
-  // Production profile cover. FIX45-FIX52 midpoint evidence is recorded in
-  // the cleanup ledger above; the four audit-only additions were removed after
-  // they proved unused by RAW and final routes under the stable local selector.
+  // Current production Valhalla profile cover. Changing this set changes the
+  // connector graph search space and is not a local tuning change. Historical
+  // cover experiments and closure evidence are retained in the non-authoritative
+  // evidence history above.
   val Profiles = Vector(
     Profile(20.0, 0.25, 0.35), Profile(20.0, 0.50, 0.35), Profile(20.0, 0.90, 0.35),
     Profile(15.0, 0.05, 0.35), Profile(15.0, 0.50, 0.75), Profile(15.0, 0.90, 0.35),
@@ -898,8 +867,8 @@ object MtbRoutePlanner:
         if surf=="impassable" then reasons += "impassable"
     }
 
-    // Unknown modeled duration still fails closed because the road exposure
-    // cannot be established.  A finite >=120 s run is evidence only in FIX31.
+    // Unknown modeled duration fails closed because the road exposure cannot be
+    // established. Finite primary exposure remains scored rather than hard-rejected.
     unprotectedPrimaryRuns(edges,geometry).foreach { case(_,sec) =>
       if !sec.isFinite then reasons += "primary-unknown-time"
     }
@@ -1797,7 +1766,7 @@ object MtbRoutePlanner:
       diag:Diagnostics
   ):Result[Option[Connector]] =
     diag.generated += 1
-    if diag.generated == 1 || diag.generated % 50 == 0 then
+    if diag.generated == 1 || diag.generated % 250 == 0 then
       appendLiveDebug(
         s"connector-progress generated=${diag.generated} noRoute=${diag.noRoute} accepted-so-far=${diag.acceptedVariants} rejects=${diag.hardRejects.values.sum} safetyReroutes=${diag.safetyReroutes}"
       )
@@ -2246,16 +2215,6 @@ object MtbRoutePlanner:
     val rejectText=diag.hardRejects.toVector.sortBy(-_._2).map{case(k,v)=>s"$k=$v"}.mkString(", ")
     s"graph transitions nonEmpty=$nonEmpty empty=$empty acceptedVariants=${diag.acceptedVariants} retained=${diag.retained} safetyReroutes=${diag.safetyReroutes}; startMissing=${startMissing.mkString("[",",","]")}; loopFinishMissing=${loopFinishMissing.mkString("[",",","]")}; p2pFinishMissing=${p2pFinishMissing.mkString("[",",","]")}; deadInbound=${deadInbound.mkString("[",",","]")}; deadOutbound=${deadOutbound.mkString("[",",","]")}; rejects={$rejectText}"
 
-  def graphNodeDiagnostics(trails:Vector[Trail],graph:Map[(String,String),Vector[Connector]]):Vector[String] =
-    trails.map { t =>
-      val inbound=trails.filterNot(_.name==t.name).count(o => graph.getOrElse((o.name,t.name),Vector.empty).nonEmpty)
-      val outbound=trails.filterNot(_.name==t.name).count(o => graph.getOrElse((t.name,o.name),Vector.empty).nonEmpty)
-      val start=graph.getOrElse(("START",t.name),Vector.empty).size
-      val loop=graph.getOrElse((t.name,"FINISH_LOOP"),Vector.empty).size
-      val p2p=graph.getOrElse((t.name,"FINISH_P2P"),Vector.empty).size
-      s"graph-node ${t.name} startVariants=$start inboundTransitions=$inbound outboundTransitions=$outbound loopFinishVariants=$loop p2pFinishVariants=$p2p"
-    }
-
   def warmupAfter(order:Vector[Int],trails:Vector[Trail]):Int =
     val first=order.indexWhere(i=>trails(i).demanding.demanding)
     if first<0 then 0 else if first>=2 then 0 else if first==1 then 1 else Int.MaxValue
@@ -2285,10 +2244,8 @@ object MtbRoutePlanner:
   )
 
   /**
-    * `front` contains one exact future-continuation state only.  FIX8 mixed all
-    * prevAscent/prevDelta groups for the same (mask,last) in one ArrayBuffer and
-    * re-scanned unrelated groups on every insertion.  That was exact but could
-    * become quadratic in the number of continuation states.
+    * `front` contains one exact future-continuation state only. Labels with
+    * different climb continuation state are never dominance-compared here.
     */
   def insertRiderGroup(
       front:mutable.ArrayBuffer[RiderLabel],
@@ -2400,7 +2357,7 @@ object MtbRoutePlanner:
       score:Double
   )
 
-  // Production selector since FIX51. Measures the largest local
+  // Production selector. Measures the largest local
   // drop in marginal candHard improvement per extra transfer second. Transfer
   // and candHard are both modeled seconds, so the slope is dimensionless.
   // Only neighboring Pareto segments are used; no far FAST/COMFORT normalization
@@ -2470,10 +2427,6 @@ object MtbRoutePlanner:
     var baselinePruned=0L
     val perf=RiderPerf()
     val dpStarted=System.nanoTime()
-    appendLiveDebug(
-      f"rider-search-exact $debugLabel baselineTransfer=${baseline.transfer}%.3f noFixedTimeHorizon=true"
-    )
-
     def insert(l:RiderLabel):Unit =
       generatedLabels+=1
       if partialCanStillUpgrade(l,baseline) then
@@ -2525,8 +2478,6 @@ object MtbRoutePlanner:
     val fullGroups=states.toVector
       .filter { case(key,_) => key._1==full }
       .sortBy(_._1)
-    val terminalStarted=System.nanoTime()
-    var terminalCandidatesChecked=0L
     var eligibleCandidates=0L
     val tradeoffFrontier=new java.util.TreeMap[java.lang.Double,RiderTerminal]()
 
@@ -2534,7 +2485,6 @@ object MtbRoutePlanner:
       val last=key._2
       labels.foreach { l =>
         graph.getOrElse((trails(last).name,mode.finishKey),Vector.empty).filter(_.effectiveWall<=ceiling).foreach { c =>
-          terminalCandidatesChecked += 1
           val rm=l.rider.concat(c.rider)
           val climb=l.climb.add(c.ascentM,l.connectors.size)
           val wall=math.max(l.requiredWall,c.effectiveWall)
@@ -2546,9 +2496,6 @@ object MtbRoutePlanner:
         }
       }
     }
-    appendLiveDebug(
-      f"rider-terminal DONE $debugLabel candidates=$terminalCandidatesChecked eligible=$eligibleCandidates frontier=${tradeoffFrontier.size} bestFound=${!tradeoffFrontier.isEmpty} elapsed=${(System.nanoTime()-terminalStarted)/1e9}%.3fs"
-    )
     val productFront=tradeoffFrontierValues(tradeoffFrontier)
     val localSelection=selectLocalMarginalDrop(productFront)
     val selectedFront=localSelection.map(_.selected).toVector
@@ -2558,9 +2505,6 @@ object MtbRoutePlanner:
           f"transfer=${e.selected.transfer}%.1f candHard=${e.selected.rider.candHard}%.1f score=${e.score}%.6f"
       )
     }
-    appendLiveDebug(
-      f"rider-selector DONE $debugLabel policy=local-marginal-drop eligible=$eligibleCandidates frontier=${tradeoffFrontier.size}%d returned=${selectedFront.size} elapsed=${(System.nanoTime()-terminalStarted)/1e9}%.3fs"
-    )
     appendLiveDebug(
       f"rider-dp DONE $debugLabel eligible-terminals=$eligibleCandidates selected=${selectedFront.size} generated=$generatedLabels baselinePruned=$baselinePruned " +
         f"insertCalls=${perf.insertCalls} dominanceChecks=${perf.dominanceChecks} insertSec=${perf.insertNanos/1e9}%.3f totalSec=${(System.nanoTime()-dpStarted)/1e9}%.3f"
@@ -2983,7 +2927,6 @@ object MtbRoutePlanner:
               trails,
               graph
             )
-            appendLiveDebug(s"phase=rider C${classIndex+1} DONE selectedUpgradeCandidates=${riderFront.size}")
             diag.riderFrontierSizes(s"C${classIndex+1}-${mode}")=riderFront.size
             diag.timings+=(s"rider C${classIndex+1}"->((System.nanoTime()-started)/1e9))
             val selected=chooseFinal(riderFront,baseline,classIndex,classes)
@@ -3020,7 +2963,6 @@ object MtbRoutePlanner:
               diag.timings+=("connector graph"->((System.nanoTime()-graphStarted)/1e9))
               appendLiveDebug("phase=connector-graph DONE " + graphDiagnostic(trails,graph,diag))
               appendLiveDebug("valhalla-cache " + client.cacheStats)
-              graphNodeDiagnostics(trails,graph).foreach(appendLiveDebug)
 
               val loopReachable=hasCompleteOrder(Mode.LOOP,trails,graph)
               val p2pReachable=hasCompleteOrder(Mode.P2P,trails,graph)
@@ -3061,10 +3003,8 @@ object MtbRoutePlanner:
                     ).mkString("\n")
                     Left(s"RAW useful wall selector produced only ${usefulSeverities.size} distinct levels; breakpoints:\n$table")
                   else
-                    // Canonical production selector: C1 is the first useful
-                    // wall level, C3 the last, and C2 the last interior useful
-                    // level. This is intentionally the validated old-product
-                    // policy, not an invented numeric target.
+                    // Production selector: C1 is the first useful wall level, C3 the
+                    // last, and C2 the last interior useful level.
                     val classes=Vector(
                       usefulSeverities.head,
                       usefulSeverities.drop(1).dropRight(1).last,
@@ -3642,7 +3582,7 @@ object MtbRoutePlanner:
         "far low-benefit comfort tail must not move this local elbow fixture"
       )
 
-      // FIX50/FIX51 regression: use a compact rounded projection of the real C2
+      // Historical selector regression: use a compact rounded projection of the real C2
       // frontier. The old global-extrema-normalized knee MUST move when a far
       // comfort endpoint is appended; this proves the fixture actually captures
       // the historical failure. The local marginal selector MUST NOT move because
