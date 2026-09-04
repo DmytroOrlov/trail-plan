@@ -5,8 +5,8 @@
 This repository uses GitHub Spec Kit for substantive change execution.
 
 `.specify/memory/constitution.md` is the mandatory governance entry point. It
-owns source precedence, canonical ownership, working rules, change lifecycle,
-and completion criteria. This file is a repository router only and owns no
+owns source precedence, canonical ownership, working rules, and completion
+criteria. This file is a repository router only and owns no
 governance rules.
 
 ## Repository navigation
@@ -24,10 +24,3 @@ Historical Scala snapshots, archived change artifacts, source-history comments,
 and prior chat context are not current authority.
 
 Build/run/test tooling: read `docs/DEVELOPMENT.md`.
-
-## Skill routing
-
-`.agents/skills/invariant-promotion/SKILL.md` and
-`.agents/skills/test-traceability-sync/SKILL.md` remain the project mechanisms
-for newly established durable knowledge and traceability synchronization; the
-constitution defines when each applies.

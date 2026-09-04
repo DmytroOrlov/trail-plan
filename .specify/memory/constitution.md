@@ -1,252 +1,168 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 -> 1.1.0
-- Amendment rationale: remove restated product/architecture semantics from
-  Principle III so this constitution governs how canonical truth may change
-  instead of independently owning what that truth is (per
-  docs/migrations/spec-kit-ownership-audit.md); align governance with the
-  actual adoption state (constitution and thin AGENTS.md landed together in
-  the ratified initial migration).
+- Version change: 1.1.0 -> 2.0.0 (MAJOR)
+- Amendment rationale: explicit, user-requested withdrawal of the
+  repository-specific process machinery adopted during the first Spec Kit
+  change (recorded in specs/002-governance-simplification/). The two project
+  process skills and the repository-owned workflow completion extensions are
+  withdrawn; only their durable rules survive, restated directly and concisely
+  in this constitution. No product guarantee, architecture truth, decision
+  status, or planner behavior changed, and historical records remain intact.
 - Changed principles:
-  - III. Exactness, Safety, and Architectural Boundaries -> now a
-    no-silent-weakening governance rule pointing at the Principle I owners.
+  - Former Principle I (canonical authority) and the source-precedence and
+    persistence sections are condensed into the Core durable rules.
+  - Former Principles II-III restated product and architecture semantics; the
+    semantics are removed and only the no-silent-weakening governance rule is
+    retained.
+  - Former Principles IV-V mandated skill handoffs, evidence packages, and a
+    separate blocked-verification stage; the durable residue is now the Working
+    rules, and the process machinery is withdrawn.
+  - The lifecycle's required trailing review and verification stages are
+    replaced by stock-command Completion.
 - Follow-up TODOs: none.
-  - Later reassessment is owned by docs/migrations/spec-kit-ownership-audit.md
-    (post-trial re-audit), not by this file.
 -->
 
 # Trail Plan Constitution
 
-## Core Principles
+This constitution is the repository's mandatory governance entry point. It
+states only durable, project-specific rules: how canonical truth is owned, how
+it may change, and how work is synchronized and completed. It does not own or
+restate product or architecture semantics.
 
-### I. Canonical Repository Authority
+## Core durable rules
 
-Repository truth MUST be taken from the canonical owner for each kind of knowledge.
+### Canonical ownership and source precedence
 
-- `docs/PRODUCT_CONTRACT.md` owns current implementation-independent product guarantees.
-- `docs/ARCHITECTURE.md` owns the current implementation architecture and representation boundaries.
+Each kind of knowledge has exactly one canonical owner:
+
+- `docs/PRODUCT_CONTRACT.md` owns current implementation-independent product
+  guarantees (`PC-*`).
+- `docs/ARCHITECTURE.md` owns the current architecture and representation
+  boundaries.
 - `docs/CURRENT_STATE.md` owns established, rejected, and open decision status.
-- `docs/TEST_MATRIX.md` owns executable regression traceability and coverage classification.
+- `docs/TEST_MATRIX.md` owns executable regression traceability, coverage
+  classification, and the definitions of the coverage classes.
 - `docs/adr/` owns durable historical decision rationale.
-- `trail-plan.scala` is the only canonical current production implementation and
-  executable regression source.
-- Historical Scala snapshots, prior chat context, temporary diagnostics, and
-  archived Spec Kit feature artifacts MUST NOT override current canonical owners.
+- `trail-plan.scala` is the only current production implementation and the
+  default-running regression suite.
+- `specs/<change>/` owns the record of one active Spec Kit change.
 
-All substantive Spec Kit work MUST read the relevant canonical owners before
-creating or changing `spec.md`, `plan.md`, `tasks.md`, implementation, or
-convergence findings.
+A normative fact MUST have one textual owner. Other artifacts MAY reference
+that fact but MUST NOT silently redefine it. Where any artifact summarizes or
+cites a canonical owner, the owner's current text governs; a divergence is a
+defect to fix in the summarizing artifact and is never a basis for changing
+behavior.
 
-A normative fact MUST have one canonical textual owner. Other artifacts MAY
-reference that fact but MUST NOT silently redefine it.
+Substantive work MUST read the relevant canonical owners before specifying,
+planning, implementing, or converging.
 
-### II. Preserve Product Semantics and Production Shape
-
-The current product contract MUST be preserved unless an approved change
-explicitly changes it.
-
-The production deliverable is the single Scala script `trail-plan.scala`.
-Auxiliary analysis, diagnostics, shell commands, temporary scripts, or other
-artifacts MAY be used to investigate a problem, but they MUST NOT substitute for
-a requested production change in `trail-plan.scala`.
-
-The established single-file production shape MUST be preserved unless the user
-explicitly approves changing that architectural constraint.
-
-A Spec Kit feature that intentionally changes an existing product guarantee MUST:
-
-1. identify the affected `PC-*` contract or state explicitly that a genuinely
-   new product guarantee is being introduced;
-2. make the semantic change explicit in the feature specification;
-3. obtain human approval before implementation; and
-4. update the canonical product owner in the same completed change.
-
-Until those conditions are satisfied, the existing product contract remains
-authoritative.
-
-### III. Canonical Contracts Must Not Be Silently Weakened
-
-Changes MUST preserve established correctness and safety semantics.
-
-The concrete product, architecture, and decision semantics are owned by the
-canonical owners named in Principle I — `docs/PRODUCT_CONTRACT.md`,
-`docs/ARCHITECTURE.md`, and `docs/CURRENT_STATE.md` — not by this
-constitution. This principle therefore states only the governance rule:
-
-- an existing canonical contract MUST NOT be silently weakened, approximated,
-  or replaced because of implementation convenience;
-- an intentional change to a product guarantee MUST follow the procedure in
-  Principle II; an intentional change to established architecture or
-  decision state MUST be explicit in the active change spec, human-approved
-  before implementation, and synchronized back to its canonical owner in the
-  same completed change;
-- where any governance artifact summarizes or cites a canonical owner, the
-  owner's current text governs; a divergence is a defect to fix in the
-  summarizing artifact and is never a basis for changing behavior.
-
-A plan that conflicts with an established architecture or rejected direction
-MUST identify the conflict explicitly. It MUST NOT resolve the conflict by
-quietly weakening a contract or by treating a cleaner implementation as evidence
-that the current decision is wrong.
-
-### IV. Evidence Before Promotion
-
-New durable product or architecture semantics MUST NOT be invented from
-implementation convenience, one successful route, a test name, a comment, or an
-LLM inference about author intent.
-
-A new permanent invariant requires an established basis such as:
-
-- an explicit current user/product requirement;
-- a reproducible counterexample;
-- a deterministic regression reproducing the defect;
-- a code/data contract that necessarily establishes the behavior; or
-- independently reviewed production evidence.
-
-Investigation-only findings MUST remain investigation evidence until established.
-
-When work establishes new durable product/architecture knowledge or rejects an
-established direction, the repository MUST use
-`.agents/skills/invariant-promotion/SKILL.md` before traceability synchronization.
-
-Temporary diagnostics and experimental mechanisms MUST be removed after their
-evidence has been adjudicated unless they are explicitly promoted to production
-behavior through the normal product/architecture process.
-
-### V. Executable Regression and Traceability
-
-Every newly established permanent product or architecture invariant MUST receive
-deterministic regression protection in the same completed change when it can be
-expressed without coupling to incidental run counts or one-off observations.
-
-If such protection is structurally impossible, the change MUST report the gap as
-`BLOCKED` rather than presenting normal completion.
-
-`docs/TEST_MATRIX.md` MUST remain a traceability map, not a source of product or
-architecture semantics.
-
-Whenever executable test evidence, `PC-*` requirements, tested architecture
-invariants, or matrix mappings materially change,
-`.agents/skills/test-traceability-sync/SKILL.md` MUST be applied in the same
-change.
-
-A successful canonical route, compilation, or a checked Spec Kit requirements
-checklist is not by itself proof of correctness or regression coverage.
-
-## Repository Authority and Change Semantics
-
-### Source precedence
-
-When information conflicts, use this order:
+When information conflicts, precedence is:
 
 1. explicit current user instruction;
 2. this constitution;
-3. the relevant current canonical repository owner named in Principle I;
-4. current canonical `trail-plan.scala` code and default-running regression evidence;
-5. active Spec Kit change artifacts that do not explicitly amend a higher owner;
-6. ADR/evidence history for rationale;
+3. the relevant current canonical owner;
+4. current `trail-plan.scala` code and default-running regression evidence;
+5. active change artifacts that do not explicitly amend a higher owner;
+6. ADR and evidence history for rationale;
 7. historical snapshots and prior conversation context.
 
-An active Spec Kit specification MAY intentionally propose changing a canonical
-owner, but the proposal MUST name the affected truth and is not current product
-truth until approved, implemented, verified, and synchronized back to that owner.
+Historical Scala snapshots, archived change artifacts, temporary diagnostics,
+and prior chat context are NOT current authority; they may explain how the
+repository once operated but MUST NOT override the canonical owners.
 
-### Spec persistence model
+### No silent weakening
 
-Trail Plan uses Spec Kit feature directories as **flow-forward change records**.
+Established product, safety, exactness, representation, and fail-closed
+behavior MUST NOT be silently weakened, approximated, or replaced because of
+implementation convenience.
 
-After a change is complete:
+An intentional change to such behavior MUST be explicit in the active change,
+naming the affected truth, and MUST be human-approved before implementation and
+synchronized to its canonical owner in the same completed change.
 
-- current product truth remains in `docs/PRODUCT_CONTRACT.md`;
-- current architecture truth remains in `docs/ARCHITECTURE.md`;
-- current established/rejected/open status remains in `docs/CURRENT_STATE.md`;
-- executable protection remains mapped in `docs/TEST_MATRIX.md`;
-- durable rationale remains in ADRs;
-- completed `specs/<change>/` artifacts remain historical records of the change
-  and MUST NOT become a competing current source of truth.
+A plan that conflicts with established architecture or a rejected direction
+MUST identify the conflict explicitly and MUST NOT resolve it by quietly
+weakening a contract.
 
-### Scope discipline
+### Change versus current truth
 
-A change MUST solve the approved specification and MUST NOT silently broaden or
-narrow the problem.
+Active `specs/<change>/` artifacts describe proposed changes; the canonical
+documents describe current truth. A proposal is not current truth until it is
+approved, implemented, verified, and synchronized back to its owner. A
+completed change record remains a historical record and MUST NOT become a
+competing current source of truth.
 
-If investigation shows that the approved specification itself must change, the
-specification MUST be amended and reviewed before implementation continues.
+## Working rules
 
-Performance work MUST preserve the problem being solved. A route MUST NOT be made
-to succeed by weakening an established product or safety contract.
+### Same-change owner update
 
-Prefer deleting a disproven heuristic over compensating for it with another
-heuristic.
+When a change modifies durable product or architecture truth, the same change
+MUST update the affected canonical owner.
 
-## Spec Kit Change Lifecycle
+### Same-change traceability update
 
-For substantive planner changes, the default workflow is:
+When a change modifies normative contract or architecture clauses, or their
+regression coverage, the same change MUST update `docs/TEST_MATRIX.md`.
+
+### Regression protection when practically testable
+
+A newly established normative invariant MUST carry deterministic executable
+regression protection in the same change when it is practically testable.
+Testability is judged by the contributor inside the change. When protection is
+not practically testable, the change MUST report the gap honestly in its own
+record instead of deferring it to a separate verification stage.
+
+### Coverage honesty
+
+A `DIRECT` coverage claim is permitted only when the default-running suite
+would fail after the protected property regressed. Claiming `DIRECT` for a
+suite that would stay green is dishonest and the claim MUST be downgraded.
+Coverage-class definitions are owned by `docs/TEST_MATRIX.md` and are not
+restated here.
+
+## Completion
+
+For a substantive change, completion is the contributor's direct use of the
+stock Spec Kit commands:
 
 ```text
-specify
--> clarify
--> plan
--> checklist
--> tasks
--> analyze
--> implement
--> converge
--> independent review
--> executable regression / traceability verification
+/speckit.specify
+-> /speckit.clarify (when needed)
+-> /speckit.plan
+-> /speckit.checklist (when useful)
+-> /speckit.tasks
+-> /speckit.analyze
+-> /speckit.implement
+-> /speckit.converge
 ```
 
-Before planning or implementation, the active change MUST identify the relevant:
+followed by ordinary review, commit, and pull-request work as appropriate.
+These are contributor-invoked stock commands; no repository-owned workflow
+extension or project skill is part of the required path, and bundled/base Spec
+Kit material MUST NOT be modified.
 
-- `PC-*` requirements from `docs/PRODUCT_CONTRACT.md`;
-- architecture sections from `docs/ARCHITECTURE.md`;
-- established/rejected/open decisions from `docs/CURRENT_STATE.md`;
-- ADRs containing durable rationale;
-- existing regressions and `docs/TEST_MATRIX.md` coverage.
+Completion additionally requires that implementation, tests, canonical owners,
+and traceability are mutually consistent and that convergence reports no
+remaining gap.
 
-`spec.md` owns the intended WHAT/WHY of the active change.
-
-`plan.md` owns the implementation approach for that change and MUST include a
-Constitution Check against this file.
-
-`research.md` MAY contain hypotheses, experiments, and change-local evidence but
-does not automatically create current product or architecture truth.
-
-`tasks.md` owns implementation work decomposition.
-
-`/speckit.analyze` findings MUST be resolved at the artifact that owns the
-problem; a constitutional conflict MUST NOT be fixed by diluting the
-constitution.
-
-`/speckit.converge` verifies completeness against the active change artifacts,
-but normal project Done criteria still require relevant tests, traceability, and
-independent review.
-
-Small documentation-only or mechanical changes MAY use a shorter workflow when
-they do not alter product semantics, architecture, safety, executable
+Small mechanical or documentation-only changes MAY use a shorter stock path
+when they do not alter product semantics, architecture, safety, executable
 traceability, or established/rejected decision state.
 
-## Governance
+Independent review is permitted and encouraged case-by-case for risky changes;
+it is never a mandatory stage. Spec Kit checklists remain available whenever a
+contributor finds them useful.
 
-This constitution is the mandatory entry point for Spec Kit governance. It
-defines how Spec Kit must interact with the repository's existing canonical
-owners; it does not replace those owners.
+## Amendment
 
-Amendments require:
-
-1. an explicit rationale;
-2. human approval;
-3. a constitution version bump;
-4. review of any affected repository governance files or Spec Kit artifacts.
+Amendments to this constitution require an explicit rationale, human approval,
+and a version record, with review of any affected governance files.
 
 Versioning follows SemVer for governance:
 
-- MAJOR: removes or redefines a binding principle or changes authority/ownership
-  incompatibly;
+- MAJOR: removes or redefines a binding principle or changes authority or
+  ownership incompatibly;
 - MINOR: adds a principle or materially expands governance obligations;
 - PATCH: clarification with no semantic change.
 
-Every substantive feature plan and review MUST verify compliance with this
-constitution. Conflicts with a `MUST` are blocking until resolved explicitly.
-
-Version: 1.1.0 | Ratified: 2026-09-02 | Last Amended: 2026-09-02
+Version: 2.0.0 | Ratified: 2026-09-02 | Last Amended: 2026-09-04

@@ -110,7 +110,7 @@ Dataset-specific facts in this section must not be promoted into `PRODUCT_CONTRA
 
 # Coverage gaps
 
-This section is diagnostic. `MISSING` or `PARTIAL` does **not** automatically mean “add a new test”. Follow `../.agents/skills/invariant-promotion/SKILL.md`: first decide whether the property is a permanent invariant, then prefer extending an existing contract test when that is the same architectural contract.
+This section is diagnostic. `MISSING` or `PARTIAL` does **not** automatically mean “add a new test”. Follow `../.specify/memory/constitution.md`: first decide whether the property is a permanent invariant, then prefer extending an existing contract test when that is the same architectural contract.
 
 ## Missing direct product-contract protection
 
